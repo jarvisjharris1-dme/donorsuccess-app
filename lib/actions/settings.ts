@@ -8,7 +8,7 @@ import { auth } from '@/auth';
 import { prisma } from '@/lib/db';
 import { forOrg } from '@/lib/tenant-db';
 import { assertRole, hasRole } from '@/lib/permissions';
-import { updateOrgSchema, inviteSchema, changePasswordSchema } from '@/lib/validation';
+import { updateOrgSchema, inviteSchema, changePasswordSchema, updateProfileSchema } from '@/lib/validation';
 import { generateToken } from '@/lib/tokens';
 import { sendEmail } from '@/lib/email/resend';
 import { invitationEmail } from '@/lib/email/templates/invitation';
@@ -317,6 +317,37 @@ export async function dismissPasswordResetAction(
  * Distinct from the forgot-password flow, which is for someone locked
  * out entirely.
  */
+export async function updateOwnProfileAction(
+  _prevState: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const session = await auth();
+  if (!session) redirect('/login');
+
+  const parsed = updateProfileSchema.safeParse({
+    name: formData.get('name'),
+  });
+  if (!parsed.success) {
+    return { error: parsed.error.issues[0]?.message ?? 'Check the form for errors.' };
+  }
+
+  await prisma.user.update({
+    where: { id: session.user.id },
+    data: { name: parsed.data.name },
+  });
+
+  // The JWT session carries a copy of the name from sign-in time (see
+  // auth.config.ts), so it won't reflect this change until next login.
+  // Same tradeoff as the organization name in app/(app)/layout.tsx —
+  // pages that show the display name re-fetch it live from the DB
+  // rather than trusting the token, so this takes effect immediately
+  // without needing a session refresh.
+  revalidatePath('/settings');
+  revalidatePath('/dashboard');
+
+  return { success: 'Profile updated.' };
+}
+
 export async function changeOwnPasswordAction(
   _prevState: ActionState,
   formData: FormData,

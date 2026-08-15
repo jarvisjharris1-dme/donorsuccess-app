@@ -145,6 +145,12 @@ model Organization {
   volunteerHours         VolunteerHours[]
   chatSessions           ChatSession[]
   chatMessages           ChatMessage[]
+  fundingRounds          FundingRound[]
+  grantees               Grantee[]
+  granteeApplications    GranteeApplication[]
+  applicationCategoryRequests ApplicationCategoryRequest[]
+  evaluations            Evaluation[]
+  allocations            Allocation[]
 
   @@map("organizations")
 }
@@ -215,6 +221,8 @@ model User {
   chatSessions         ChatSession[]
   grantsWritten               Grant[] @relation("GrantWriterOnGrant")
   grantsComplianceOwned       Grant[] @relation("ComplianceOwner")
+  applicationEvaluations      Evaluation[] @relation("ApplicationReviewer")
+  allocationsDecided          Allocation[] @relation("AllocationDecidedBy")
 
   @@index([organizationId])
   @@map("users")
@@ -1505,6 +1513,245 @@ model GrantExpense {
   @@index([organizationId])
   @@index([budgetLineId])
   @@map("grant_expenses")
+}
+
+// ── Sub-granting (Phase 3C) ──────────────────────────────────────────────
+// Everything above this point assumes the organization is the applicant
+// (GrantOpportunity/Grant both hang off a Donor, the funder). This block
+// is the mirror image: the organization is itself a funder running a
+// pooled program (e.g. a United Way's EFSP cycle), and outside agencies
+// apply to it. Deliberately a separate model family rather than an
+// extension of Donor — see Grantee below for why.
+
+enum FundingRoundStatus {
+  DRAFT // being configured — categories/rubric still open to change
+  OPEN // accepting applications
+  REVIEWING // application window closed, evaluations in progress
+  DECIDED // allocations finalized, awards issued
+  CLOSED // archival — round has fully concluded
+}
+
+model FundingRound {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  name        String // e.g. "EFSP Phase 41 (FY2023)"
+  description String?
+  status      FundingRoundStatus @default(DRAFT)
+
+  totalPool Decimal @db.Decimal(12, 2)
+
+  opensAt  DateTime?
+  closesAt DateTime?
+
+  // The category names an applicant can request funding under for this
+  // round (e.g. "Emergency Housing", "Emergency Feeding") — plain
+  // strings rather than a separate lookup table, since categories are
+  // defined per round and rarely reused verbatim across rounds.
+  categories String[] @default([])
+
+  // The scoring rubric reviewers score against — an ordered list of
+  // criteria, each scored 0-5 (see Evaluation.scores). Kept as JSON
+  // rather than a separate table since a round's rubric is authored
+  // once at setup and read as a whole, never queried by individual
+  // criterion.
+  rubricCriteria Json @default("[]") // string[]
+
+  applications ApplicationCategoryRequest[]
+  granteeApplications GranteeApplication[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId])
+  @@index([organizationId, status])
+  @@map("funding_rounds")
+}
+
+// ── Grantee ───────────────────────────────────────────────────────────
+// Deliberately NOT a Donor. A Donor gives this organization money and
+// carries fundraising-shaped fields (healthScore, retentionRisk,
+// lifetimeGiving, wealth screening) that mean nothing for an agency
+// receiving funds. A Grantee is the opposite relationship — its fields
+// are the ones a funder actually needs (EIN, compliance certifications,
+// service profile) and it never appears in a donor report or health
+// score job.
+
+model Grantee {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  legalName String
+  ein       String?
+
+  contactName  String?
+  contactEmail String?
+  contactPhone String?
+
+  addressLine1 String?
+  addressLine2 String?
+  city         String?
+  state        String?
+  postalCode   String?
+  country      String? @default("US")
+
+  missionSummary String?
+
+  // Prior-award total, denormalized for quick display on the grantee's
+  // profile — the authoritative figures still live on Allocation rows
+  // across every round this grantee has applied to.
+  lifetimeAwarded Decimal @default(0) @db.Decimal(12, 2)
+
+  applications GranteeApplication[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId])
+  @@map("grantees")
+}
+
+enum ApplicationStatus {
+  DRAFT
+  SUBMITTED
+  UNDER_REVIEW
+  DECIDED
+}
+
+model GranteeApplication {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  fundingRoundId String
+  fundingRound   FundingRound @relation(fields: [fundingRoundId], references: [id], onDelete: Cascade)
+
+  granteeId String
+  grantee   Grantee @relation(fields: [granteeId], references: [id], onDelete: Cascade)
+
+  status      ApplicationStatus @default(DRAFT)
+  submittedAt DateTime?
+
+  // Counterterrorism/Patriot Act/debarment certifications — carried
+  // forward from the grantee's most recent application by default (see
+  // createGranteeApplicationAction) since these rarely change year to
+  // year, but stored per-application, not on Grantee, because each
+  // round's submission is its own compliance record.
+  notOnWatchList     Boolean @default(false)
+  patriotActCompliant Boolean @default(false)
+  notDebarred        Boolean @default(false)
+
+  categoryRequests ApplicationCategoryRequest[]
+  evaluations      Evaluation[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId])
+  @@index([fundingRoundId])
+  @@index([granteeId])
+  @@unique([fundingRoundId, granteeId])
+  @@map("grantee_applications")
+}
+
+model ApplicationCategoryRequest {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  applicationId String
+  application   GranteeApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  // References FundingRound.categories by name rather than a separate
+  // Category table — see the comment there.
+  fundingRoundId String
+  fundingRound   FundingRound @relation(fields: [fundingRoundId], references: [id], onDelete: Cascade)
+  category       String
+
+  requestedAmount Decimal @db.Decimal(12, 2)
+  targetPopulation String?
+  intakeProcess    String?
+  deliveryMethod   String?
+  county           String?
+  serviceLocation  String?
+  unitsProjected   Int?
+
+  allocation Allocation?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId])
+  @@index([applicationId])
+  @@index([fundingRoundId])
+  @@map("application_category_requests")
+}
+
+// ── Evaluation ────────────────────────────────────────────────────────
+// One per reviewer per application — structured rubric scores instead
+// of e-CImpact's free-text-only comment box, so multiple reviewers'
+// judgments actually roll up into a number (see lib/allocations.ts).
+
+model Evaluation {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  applicationId String
+  application   GranteeApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  reviewerId String
+  reviewer   User   @relation("ApplicationReviewer", fields: [reviewerId], references: [id])
+
+  // Parallel array to FundingRound.rubricCriteria, each 0-5 — kept as
+  // JSON for the same reason the rubric itself is: read as a whole per
+  // evaluation, never queried by individual criterion score.
+  scores  Json // number[]
+  comment String?
+
+  submittedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId])
+  @@index([applicationId])
+  @@unique([applicationId, reviewerId])
+  @@map("evaluations")
+}
+
+// ── Allocation ────────────────────────────────────────────────────────
+// The funding decision itself — one per ApplicationCategoryRequest.
+// This is the live, computed replacement for a manually-maintained
+// allocations spreadsheet: previousAllocated/requested are carried over
+// from history and the request, allocated/award/adjusted are the
+// decision a Grant Administrator makes, informed by the Evaluation
+// rollup rather than tracked separately from it.
+
+model Allocation {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  categoryRequestId String  @unique
+  categoryRequest   ApplicationCategoryRequest @relation(fields: [categoryRequestId], references: [id], onDelete: Cascade)
+
+  previousAllocated Decimal @default(0) @db.Decimal(12, 2)
+  allocatedAmount   Decimal @default(0) @db.Decimal(12, 2)
+  awardAmount       Decimal @default(0) @db.Decimal(12, 2)
+  adjustedAmount    Decimal @default(0) @db.Decimal(12, 2)
+
+  decidedById String?
+  decidedBy   User?   @relation("AllocationDecidedBy", fields: [decidedById], references: [id], onDelete: SetNull)
+  decidedAt   DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId])
+  @@map("allocations")
 }
 
 // ── Grant deadline reminders ─────────────────────────────────────────────

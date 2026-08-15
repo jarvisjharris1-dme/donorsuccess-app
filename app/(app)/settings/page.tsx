@@ -9,6 +9,7 @@ import OrgProfileForm from '@/components/settings/OrgProfileForm';
 import InviteForm from '@/components/settings/InviteForm';
 import PendingInvitations, { type InvitationRow } from '@/components/settings/PendingInvitations';
 import TeamMemberRow, { type MemberRow } from '@/components/settings/TeamMemberRow';
+import ProfileForm from '@/components/settings/ProfileForm';
 import RecalculateAllButton from '@/components/settings/RecalculateAllButton';
 import PendingPasswordResets, { type PendingResetRow } from '@/components/settings/PendingPasswordResets';
 import ChangePasswordForm from '@/components/settings/ChangePasswordForm';
@@ -45,7 +46,7 @@ export default async function SettingsPage({
   const canManage = permissions.canManageOrgSettings(session.user.role as Role);
   const db = forOrg(session.user.organizationId);
 
-  const [organization, members, invitations, wealthEngineConnection] = await Promise.all([
+  const [organization, currentUser, members, invitations, wealthEngineConnection] = await Promise.all([
     prisma.organization.findUniqueOrThrow({
       where: { id: session.user.organizationId },
       select: {
@@ -57,6 +58,13 @@ export default async function SettingsPage({
         volunteerHourlyRate: true,
         billingPeriod: true,
       },
+    }),
+    // Same reasoning as the org name above: the JWT session only carries
+    // the name from sign-in time, so this page reads the live value
+    // rather than trusting session.user.name.
+    prisma.user.findUniqueOrThrow({
+      where: { id: session.user.id },
+      select: { name: true },
     }),
     // Only Admin+ sections (Team, Pending resets) actually need the
     // member list — skip it for everyone else rather than run a query
@@ -215,6 +223,14 @@ export default async function SettingsPage({
           </div>
         </>
       )}
+
+      <div className="mt-6 rounded-[16px] border border-gray-200 bg-white p-6">
+        <h2 className="text-[15px] font-bold text-gray-900">Your profile</h2>
+        <p className="mt-1 text-sm text-gray-600">Just your display name — no one else&rsquo;s.</p>
+        <div className="mt-4">
+          <ProfileForm currentName={currentUser.name} />
+        </div>
+      </div>
 
       <div className="mt-6 rounded-[16px] border border-gray-200 bg-white p-6">
         <h2 className="text-[15px] font-bold text-gray-900">Change your password</h2>

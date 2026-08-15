@@ -46,6 +46,11 @@ export default async function DashboardPage({
   const isMine = scope === 'mine';
   const myId = session!.user.id;
 
+  // JWT only carries the name from sign-in time (see auth.config.ts), so
+  // the greeting below reads it live rather than risking a stale name
+  // right after someone updates it in Settings.
+  const currentUser = await prisma.user.findUnique({ where: { id: myId }, select: { name: true } });
+
   const donorWhere = isMine ? { assignedToId: myId } : {};
   const opportunityWhere = isMine
     ? { ownerId: myId, stage: { in: OPEN_STAGES } }
@@ -280,7 +285,7 @@ export default async function DashboardPage({
           <p className="text-[13px] font-semibold text-gray-600">{today}</p>
           <h1 className="mt-1 font-display text-[28px] font-extrabold text-gray-900 sm:text-[32px]">
             {greeting}
-            {session?.user.name ? `, ${session.user.name.split(' ')[0]}` : ''}
+            {currentUser?.name ? `, ${currentUser.name.split(' ')[0]}` : ''}
           </h1>
           <p className="mt-1 text-[15px] text-gray-600">
             {isMine ? 'Your donors and pipeline' : organization.name}

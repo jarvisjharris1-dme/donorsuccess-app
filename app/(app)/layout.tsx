@@ -33,6 +33,14 @@ export default async function AppLayout({
     select: { name: true, subscriptionStatus: true, subscriptionStatusChangedAt: true },
   });
 
+  // Same reasoning as the org name: the JWT only carries the display
+  // name from sign-in time, so a rename in Settings wouldn't show up
+  // here until next login without this live lookup.
+  const currentUser = await prisma.user.findUnique({
+    where: { id: session.user.id },
+    select: { name: true },
+  });
+
   const enforcement = getEnforcementState(
     organization?.subscriptionStatus ?? null,
     organization?.subscriptionStatusChangedAt ?? null,
@@ -52,7 +60,7 @@ export default async function AppLayout({
           })
         ).map((h) => h.navHref);
 
-  const displayName = session.user.name ?? session.user.email ?? 'User';
+  const displayName = currentUser?.name ?? session.user.email ?? 'User';
 
   // Locked accounts see the same restricted screen on every route under
   // this layout — the fix action (Manage Billing) lives right here, so
