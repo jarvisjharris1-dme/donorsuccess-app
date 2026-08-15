@@ -1,0 +1,24 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/delete-canceled-organizations",
+      "schedule": "0 4 * * *"
+    },
+    {
+      "path": "/api/cron/sync-salesforce",
+      "schedule": "0 5 * * *"
+    },
+    {
+      "path": "/api/cron/recalculate-scores",
+      "schedule": "0 6 * * *"
+    },
+    {
+      "path": "/api/cron/send-grant-deadline-reminders",
+      "schedule": "0 7 * * *"
+    },
+    {
+      "path": "/api/cron/generate-executive-briefing",
+      "schedule": "30 7 * * *"
+    }
+  ]
+}

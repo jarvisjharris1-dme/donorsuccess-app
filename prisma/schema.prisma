@@ -1,0 +1,2081 @@
+// ─────────────────────────────────────────────────────────────────────────
+// Donor Success — Data Model
+// Multi-tenant: every donor-facing table is scoped by organizationId.
+// Never query any tenant-scoped model directly — use forOrg() from
+// lib/tenant-db.ts, which enforces the organizationId filter/injection
+// at the query layer. See that file for the full list of scoped models.
+// ─────────────────────────────────────────────────────────────────────────
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  // DATABASE_URL: the connection the running app uses. On Neon, this
+  // should be the *pooled* connection string (host ends in "-pooler") —
+  // serverless/edge-friendly, handles many short-lived connections well.
+  url = env("DATABASE_URL")
+  // DIRECT_URL: used only by `prisma migrate` / `prisma db push`. Schema
+  // changes need a direct session, which PgBouncer-style pooling (what
+  // Neon's pooled connection uses) doesn't support. On Neon this is the
+  // *unpooled* connection string. If you're not on Neon/pooled Postgres,
+  // it's fine to point both at the same URL.
+  directUrl = env("DIRECT_URL")
+}
+
+// ── Auth / Tenancy ─────────────────────────────────────────────────────
+
+enum Role {
+  OWNER        // full control, billing, can delete org
+  ADMIN        // manage users, all donor data, settings
+  FUNDRAISER   // manage donors/gifts/opportunities they own or are shared
+  VIEWER       // read-only, e.g. an ED reviewing from outside their usual role
+  BOARD_MEMBER // future: a board member's own portal account — restricted to
+               // their own BoardTerm/BoardCommitment/BoardIntroduction records
+               // only, never general donor data. Added now so the schema
+               // doesn't need a disruptive migration when the portal itself
+               // gets built; no portal UI or access restrictions exist yet.
+}
+
+// Additive, not a replacement for Role above — orgs that don't use
+// Grants Management never need to touch this. A user's base Role still
+// governs everything else in the app; this is specifically for
+// granting elevated grants-module access to someone whose main Role
+// might otherwise be FUNDRAISER or even VIEWER. OWNER/ADMIN always
+// have full grants access regardless of this field — see
+// lib/grant-permissions.ts for the actual capability matrix.
+enum GrantRole {
+  GRANT_ADMINISTRATOR   // full control across the whole grants module
+  GRANT_FINANCE_MANAGER // budget, expenses, disbursements
+  GRANT_WRITER          // opportunities, requirements, compliance, documents
+  GRANT_REVIEWER        // read-only, plus commenting
+}
+
+enum SubscriptionTier {
+  TRIAL
+  STARTER
+  GROWTH
+  ENTERPRISE
+}
+
+model Organization {
+  id               String           @id @default(cuid())
+  name             String
+  slug             String           @unique
+  subscriptionTier SubscriptionTier @default(TRIAL)
+  crmProvider      String? // e.g. "salesforce", "raisers_edge", "none"
+  timezone         String           @default("America/New_York")
+
+  // Nullable — null means "use the current Independent Sector national
+  // rate" (see VOLUNTEER_HOUR_RATE_USD in lib/volunteer.ts). Only set
+  // this when an org wants to override with their own figure (e.g., a
+  // state-specific Independent Sector rate, or a locally negotiated
+  // number for grant reporting). Deliberately NOT auto-updated when
+  // Independent Sector republishes their annual rate — see the
+  // reasoning on VolunteerHours.hourlyRateApplied below for why the
+  // rate used has to be captured per-entry, not read live from here.
+  volunteerHourlyRate Decimal? @db.Decimal(6, 2)
+
+  // Stripe — only populated for self-serve Starter/Growth organizations.
+  // Enterprise stays sales-led and manually provisioned through the
+  // Master Admin Console, so these stay null for those orgs.
+  stripeCustomerId     String?             @unique
+  stripeSubscriptionId String?             @unique
+  // Stripe's own subscription status vocabulary (active, past_due,
+  // canceled, trialing, incomplete, ...) — stored loosely as a string
+  // rather than a strict enum, since Stripe's exact set of values can
+  // change and a rigid enum mismatch would fail webhook processing on
+  // any value we hadn't anticipated. Same pattern already used for
+  // crmProvider above.
+  subscriptionStatus   String?
+  // Set whenever subscriptionStatus changes (in the Stripe webhook
+  // handler) — this is what the grace-period and data-deletion clocks
+  // both count from, not when the org was originally created.
+  subscriptionStatusChangedAt DateTime?
+  billingPeriod        String? // "monthly" | "annual"
+
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  users         User[]
+  invitations   Invitation[]
+  donors        Donor[]
+  gifts         Gift[]
+  campaigns     Campaign[]
+  interactions  Interaction[]
+  opportunities Opportunity[]
+  tasks         Task[]
+  healthScores  HealthScoreSnapshot[]
+  auditLogs     AuditLog[]
+  successPlans  DonorSuccessPlan[]
+  planMilestones PlanMilestone[]
+  crmConnections CrmConnection[]
+  emailTemplates EmailTemplate[]
+  donorContacts  DonorContact[]
+  donorAffiliations DonorAffiliation[]
+  wealthEngineConnection WealthEngineConnection?
+  sequenceTemplates      SequenceTemplate[]
+  sequenceTemplateSteps  SequenceTemplateStep[]
+  sequenceEnrollments    DonorSequenceEnrollment[]
+  sequenceStepLogs       DonorSequenceStepLog[]
+  grantOpportunities     GrantOpportunity[]
+  grantRequirements      GrantRequirement[]
+  grants                 Grant[]
+  grantMilestones        GrantMilestone[]
+  grantDocuments         GrantDocument[]
+  grantComments          GrantComment[]
+  grantBudgetLines       GrantBudgetLine[]
+  grantExpenses          GrantExpense[]
+  grantReminderLogs      GrantReminderLog[]
+  planComments           PlanComment[]
+  planTemplates          PlanTemplate[]
+  planTemplateMilestones PlanTemplateMilestone[]
+  executiveBriefing      ExecutiveBriefingSnapshot?
+  boards                 Board[]
+  committees             Committee[]
+  boardTerms             BoardTerm[]
+  boardCommitments       BoardCommitment[]
+  boardIntroductions     BoardIntroduction[]
+  committeeMemberships   CommitteeMembership[]
+  boardMeetings          BoardMeeting[]
+  boardMeetingAttendance BoardMeetingAttendance[]
+  boardMeetingDocuments  BoardMeetingDocument[]
+  hiddenNavItems         HiddenNavItem[]
+  volunteerHours         VolunteerHours[]
+  chatSessions           ChatSession[]
+  chatMessages           ChatMessage[]
+
+  @@map("organizations")
+}
+
+model User {
+  id             String    @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  name          String?
+  email         String    @unique
+  emailVerified DateTime?
+  image         String?
+  passwordHash  String? // null for OAuth-only accounts
+  role          Role      @default(FUNDRAISER)
+  isActive      Boolean   @default(true)
+  lastLoginAt   DateTime?
+
+  // Grants access to /admin — the cross-organization master console for
+  // provisioning new customers and their initial setup. Deliberately a
+  // separate flag from `role`: role is meaningful only *within* a User's
+  // own organization, whereas this grants access that spans every
+  // organization in the system. Almost nobody should have this set to
+  // true — see lib/permissions.ts and app/admin/layout.tsx for the
+  // gating, and lib/actions/admin.ts for the only place cross-org
+  // mutations are permitted at all.
+  isPlatformAdmin Boolean @default(false)
+  grantRole       GrantRole?
+
+  // Nullable — only ever set for a future BOARD_MEMBER portal account,
+  // linking a login to the Donor record that already holds their
+  // giving history. Needs an explicit relation name since Donor
+  // already has a separate User relation via assignedToId.
+  donorId String? @unique
+  donor   Donor?  @relation("PortalDonorLink", fields: [donorId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // NextAuth
+  accounts Account[]
+  sessions Session[]
+
+  // App relations
+  assignedDonors      Donor[]        @relation("DonorAssignee")
+  ownedOpportunities  Opportunity[]  @relation("OpportunityOwner")
+  tasksAssigned       Task[]         @relation("TaskAssignee")
+  tasksCreated        Task[]         @relation("TaskCreator")
+  interactionsLogged  Interaction[]  @relation("InteractionLoggedBy")
+  invitationsSent     Invitation[]   @relation("InvitationSender")
+  auditLogs           AuditLog[]
+  ownedSuccessPlans   DonorSuccessPlan[] @relation("PlanOwner")
+  createdSuccessPlans DonorSuccessPlan[] @relation("PlanCreator")
+  ownedMilestones     PlanMilestone[]    @relation("MilestoneOwner")
+  crmConnectionsMade  CrmConnection[]
+  emailConnection     EmailConnection?
+  assignedCampaigns   Campaign[] @relation("CampaignAssignments")
+  wealthEngineConnectionsMade WealthEngineConnection[]
+  sequenceEnrollmentsStarted  DonorSequenceEnrollment[] @relation("SequenceEnrolledBy")
+  sequenceStepsSent           DonorSequenceStepLog[] @relation("SequenceStepSentBy")
+  grantOpportunitiesWritten   GrantOpportunity[] @relation("GrantWriter")
+  grantDocumentsUploaded      GrantDocument[]
+  grantComments               GrantComment[]
+  planComments                PlanComment[]
+  grantExpensesLogged         GrantExpense[]
+  boardMeetingDocumentsUploaded BoardMeetingDocument[]
+  volunteerHoursLogged VolunteerHours[]
+  chatSessions         ChatSession[]
+  grantsWritten               Grant[] @relation("GrantWriterOnGrant")
+  grantsComplianceOwned       Grant[] @relation("ComplianceOwner")
+
+  @@index([organizationId])
+  @@map("users")
+}
+
+model Invitation {
+  id             String   @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  email       String
+  role        Role     @default(FUNDRAISER)
+  token       String   @unique
+  invitedById String
+  invitedBy   User     @relation("InvitationSender", fields: [invitedById], references: [id])
+
+  expiresAt  DateTime
+  acceptedAt DateTime?
+  createdAt  DateTime @default(now())
+
+  @@unique([organizationId, email])
+  @@index([organizationId])
+  @@map("invitations")
+}
+
+// Standard Auth.js models (enables adding OAuth providers later)
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@map("accounts")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+  @@map("verification_tokens")
+}
+
+// ── Core Donor Data ────────────────────────────────────────────────────
+
+enum DonorType {
+  INDIVIDUAL
+  HOUSEHOLD
+  ORGANIZATION
+  FOUNDATION
+  CORPORATION
+}
+
+enum RetentionRisk {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+// Distinct from DonorType (which is about legal/entity structure —
+// individual vs. household vs. org). Segment is a simpler, high-level
+// grouping fundraisers actually use to filter and report on their file.
+enum DonorSegment {
+  INDIVIDUAL
+  CORPORATE
+  PHILANTHROPIC
+}
+
+model Donor {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  donorType        DonorType @default(INDIVIDUAL)
+
+  // Set only for donors pulled in from a Salesforce sync — lets repeat
+  // syncs update the existing record instead of creating duplicates.
+  // Nullable + unique is safe in Postgres: NULL never conflicts with
+  // NULL in a unique index, so donors created directly in this app
+  // (the vast majority) are unaffected.
+  salesforceContactId String?
+
+  // Set only for donors pulled in from a Salesforce Account (an
+  // organization/foundation/corporation) rather than a Contact. A donor
+  // will only ever have one of salesforceContactId/salesforceAccountId
+  // set, never both — they're two different sync sources for two
+  // different kinds of donor.
+  salesforceAccountId String?
+
+  // Cached results from the most recent WealthEngine screening — see
+  // lib/integrations/wealthengine.ts. Nothing here is refreshed
+  // automatically; a fundraiser explicitly triggers a screen per
+  // donor, since each lookup has a real per-profile cost.
+  wealthEstimatedNetWorth Decimal?  @db.Decimal(14, 2)
+  wealthEstimatedIncome   Decimal?  @db.Decimal(12, 2)
+  wealthRealEstateValue   Decimal?  @db.Decimal(14, 2)
+  wealthGivingCapacity    Decimal?  @db.Decimal(12, 2)
+  wealthP2gScore          Int? // WealthEngine's Propensity to Give score
+  wealthScreenedAt        DateTime?
+  // Full raw response, kept alongside the mapped fields above so
+  // nothing WealthEngine returns is silently lost even though only a
+  // handful of fields are surfaced in the UI today.
+  wealthScreeningRaw      Json?
+
+  firstName        String?
+  lastName         String?
+  organizationName String? // for ORGANIZATION / FOUNDATION / CORPORATION donor types
+  email            String?
+  phone            String?
+
+  addressLine1 String?
+  addressLine2 String?
+  city         String?
+  state        String?
+  postalCode   String?
+  country      String? @default("US")
+
+  // Cached / computed fields — recalculated by the health-scoring job,
+  // never hand-edited. See lib/scoring/health-score.ts.
+  healthScore    Int?           // 0–100
+  retentionRisk  RetentionRisk?
+  lifetimeGiving Decimal        @default(0) @db.Decimal(12, 2)
+  largestGift    Decimal?       @db.Decimal(12, 2)
+  giftCount      Int            @default(0)
+  firstGiftDate  DateTime?
+  lastGiftDate   DateTime?
+
+  segment      DonorSegment?
+  tags         String[] @default([])
+  customFields Json?
+
+  // A short brief a fundraiser keeps current so an Executive Director
+  // or board member can read it right before a call and sound
+  // informed — not a replacement for the interaction timeline, more of
+  // a "here's where things stand" summary. Plain text, editable inline
+  // from the donor page (see components/donors/ExecutiveSummaryCard.tsx).
+  executiveSummary String?
+
+  assignedToId String?
+  assignedTo   User?   @relation("DonorAssignee", fields: [assignedToId], references: [id])
+
+  // Back-relation for a future BOARD_MEMBER portal login, if this
+  // donor is also a board member with their own account.
+  portalUser User? @relation("PortalDonorLink")
+
+  boardTerms                BoardTerm[]
+  introductionsAsProspect   BoardIntroduction[] @relation("IntroductionProspect")
+  volunteerHours            VolunteerHours[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  gifts               Gift[]
+  interactions        Interaction[]
+  opportunities       Opportunity[]
+  tasks               Task[]
+  healthScoreHistory  HealthScoreSnapshot[]
+  successPlans        DonorSuccessPlan[]
+  contacts            DonorContact[]
+  affiliations        DonorAffiliation[] @relation("DonorAffiliations")
+  affiliatedFrom       DonorAffiliation[] @relation("AffiliatedWithDonor")
+  sequenceEnrollments  DonorSequenceEnrollment[]
+  grantOpportunities   GrantOpportunity[]
+  grants               Grant[]
+
+  @@index([organizationId])
+  @@index([organizationId, assignedToId])
+  @@index([organizationId, retentionRisk])
+  @@unique([organizationId, salesforceContactId])
+  @@unique([organizationId, salesforceAccountId])
+  @@map("donors")
+}
+
+// ── Giving ──────────────────────────────────────────────────────────────
+
+enum GiftType {
+  ONE_TIME
+  RECURRING
+  PLEDGE
+  IN_KIND
+  GRANT
+}
+
+enum PaymentMethod {
+  CREDIT_CARD
+  ACH
+  CHECK
+  CASH
+  STOCK
+  OTHER
+}
+
+model Gift {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  donorId String
+  donor   Donor  @relation(fields: [donorId], references: [id], onDelete: Cascade)
+
+  campaignId String?
+  campaign   Campaign? @relation(fields: [campaignId], references: [id])
+
+  amount            Decimal       @db.Decimal(12, 2)
+  currency          String        @default("USD")
+  giftType          GiftType      @default(ONE_TIME)
+  paymentMethod     PaymentMethod @default(CREDIT_CARD)
+  fund              String?
+  date              DateTime
+  isRecurring       Boolean       @default(false)
+  recurringFrequency String?      // "monthly" | "quarterly" | "annually"
+  notes             String?
+  receiptSent       Boolean       @default(false)
+
+  // Set when this gift was created from a Salesforce Opportunity that
+  // closed Won — prevents creating a second Gift for the same
+  // Opportunity on the next sync run.
+  salesforceOpportunityId String?
+
+  // Set when this gift represents a disbursement against an awarded
+  // Grant — a multi-year grant paid in installments produces one Gift
+  // per disbursement, all traceable back to the same Grant. Nullable
+  // and SetNull on delete: a regular gift with no grant is the
+  // overwhelming majority case, and deleting a Grant should never take
+  // its historical gift records down with it.
+  grantId String?
+  grant   Grant?  @relation(fields: [grantId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId])
+  @@index([organizationId, donorId])
+  @@index([organizationId, date])
+  @@unique([organizationId, salesforceOpportunityId])
+  @@map("gifts")
+}
+
+// ── Campaigns ───────────────────────────────────────────────────────────
+
+enum CampaignStatus {
+  PLANNING
+  ACTIVE
+  COMPLETED
+  ARCHIVED
+}
+
+enum CampaignChannel {
+  EMAIL
+  DIRECT_MAIL
+  EVENT
+  DIGITAL
+  PHONE
+  SOCIAL
+  OTHER
+}
+
+model Campaign {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  name          String
+  description   String?
+  goalAmount    Decimal?       @db.Decimal(12, 2)
+  raisedAmount  Decimal        @default(0) @db.Decimal(12, 2) // cached, kept in sync by gift triggers/jobs
+  status        CampaignStatus @default(PLANNING)
+  channel       CampaignChannel @default(EMAIL)
+  startDate     DateTime?
+  endDate       DateTime?
+
+  // Sub-campaigns nest under a parent (e.g. "2026 Annual Fund" → "Direct
+  // Mail Appeal", "Year-End Online Push"). Only one level deep is
+  // enforced in the UI, not the schema — a sub-campaign's own
+  // subCampaigns would work at the data level but isn't something the
+  // forms currently expose, to keep the hierarchy simple to reason
+  // about.
+  parentCampaignId String?
+  parentCampaign   Campaign?  @relation("CampaignSubTypes", fields: [parentCampaignId], references: [id], onDelete: SetNull)
+  subCampaigns     Campaign[] @relation("CampaignSubTypes")
+
+  // Visibility: true (default) means every fundraiser in the org sees
+  // this campaign everywhere it's listed. false restricts it to just
+  // the fundraisers in assignedFundraisers — for something like a
+  // major-gifts-only campaign that shouldn't clutter every
+  // fundraiser's view.
+  visibleToAll       Boolean @default(true)
+  assignedFundraisers User[] @relation("CampaignAssignments")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  gifts Gift[]
+  emailTemplates EmailTemplate[]
+
+  @@index([organizationId])
+  @@index([organizationId, status])
+  @@index([organizationId, parentCampaignId])
+  @@map("campaigns")
+}
+
+// ── Engagement ──────────────────────────────────────────────────────────
+
+enum InteractionType {
+  EMAIL
+  CALL
+  MEETING
+  EVENT
+  LETTER
+  TEXT
+  NOTE
+}
+
+model Interaction {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  donorId String
+  donor   Donor  @relation(fields: [donorId], references: [id], onDelete: Cascade)
+
+  type       InteractionType
+  subject    String?
+  notes      String?
+  occurredAt DateTime
+
+  loggedById String
+  loggedBy   User   @relation("InteractionLoggedBy", fields: [loggedById], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@index([organizationId])
+  @@index([organizationId, donorId])
+  @@map("interactions")
+}
+
+// ── Major Gifts Pipeline ───────────────────────────────────────────────
+
+enum OpportunityStage {
+  IDENTIFICATION
+  CULTIVATION
+  SOLICITATION
+  STEWARDSHIP
+  CLOSED_WON
+  CLOSED_LOST
+}
+
+model Opportunity {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  donorId String
+  donor   Donor  @relation(fields: [donorId], references: [id], onDelete: Cascade)
+
+  name              String
+  stage             OpportunityStage @default(IDENTIFICATION)
+  askAmount         Decimal?         @db.Decimal(12, 2)
+  expectedAmount    Decimal?         @db.Decimal(12, 2)
+  probability       Int?             // 0–100, used for weighted pipeline forecasting
+  expectedCloseDate DateTime?
+  closedAt          DateTime?
+  notes             String?
+
+  // Set for Opportunities pulled in from Salesforce — lets repeat syncs
+  // update the existing record (e.g. stage change) instead of
+  // duplicating it.
+  salesforceId String?
+
+  ownerId String
+  owner   User   @relation("OpportunityOwner", fields: [ownerId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tasks Task[]
+
+  @@index([organizationId])
+  @@index([organizationId, stage])
+  @@index([organizationId, ownerId])
+  @@unique([organizationId, salesforceId])
+  @@map("opportunities")
+}
+
+// ── Tasks ───────────────────────────────────────────────────────────────
+
+enum TaskStatus {
+  OPEN
+  IN_PROGRESS
+  DONE
+  CANCELLED
+}
+
+enum TaskPriority {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+model Task {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  title       String
+  description String?
+  dueDate     DateTime?
+  status      TaskStatus   @default(OPEN)
+  priority    TaskPriority @default(MEDIUM)
+
+  assignedToId String
+  assignedTo   User   @relation("TaskAssignee", fields: [assignedToId], references: [id])
+
+  createdById String
+  createdBy   User   @relation("TaskCreator", fields: [createdById], references: [id])
+
+  donorId String?
+  donor   Donor?  @relation(fields: [donorId], references: [id], onDelete: SetNull)
+
+  opportunityId String?
+  opportunity   Opportunity? @relation(fields: [opportunityId], references: [id], onDelete: SetNull)
+
+  grantOpportunityId String?
+  grantOpportunity   GrantOpportunity? @relation(fields: [grantOpportunityId], references: [id], onDelete: SetNull)
+
+  boardTermId String?
+  boardTerm   BoardTerm? @relation(fields: [boardTermId], references: [id], onDelete: SetNull)
+
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([organizationId])
+  @@index([organizationId, assignedToId, status])
+  @@map("tasks")
+}
+
+// ── Health Scoring History ─────────────────────────────────────────────
+// Immutable snapshots so we can chart score trends over time and audit
+// how a score was derived (recency / frequency / monetary / engagement).
+
+model HealthScoreSnapshot {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  donorId String
+  donor   Donor  @relation(fields: [donorId], references: [id], onDelete: Cascade)
+
+  score         Int
+  retentionRisk RetentionRisk
+  factors       Json // { recency: 0-100, frequency: 0-100, monetary: 0-100, engagement: 0-100 }
+  computedAt    DateTime @default(now())
+
+  @@index([organizationId, donorId, computedAt])
+  @@map("health_score_snapshots")
+}
+
+// ── Audit Log ───────────────────────────────────────────────────────────
+// Lightweight trail for donor-PII-touching actions. Expand per compliance
+// needs (e.g. exports, deletes) as the platform matures.
+
+model AuditLog {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  userId String?
+  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  action     String // e.g. "donor.create", "donor.export", "gift.delete"
+  entityType String
+  entityId   String
+  metadata   Json?
+  createdAt  DateTime @default(now())
+
+  @@index([organizationId, createdAt])
+  @@map("audit_logs")
+}
+
+// ── Donor Success Plans ────────────────────────────────────────────────
+// A strategic cultivation plan for a specific donor — donor-centric
+// counterpart to a customer success plan. Tracks where the donor sits in
+// the Donor Success Framework™ (Attract → Engage → Cultivate → Grow →
+// Retain → Advocate → Legacy), a giving/timing target, and a milestone
+// checklist the assigned owner works through.
+
+enum FrameworkStage {
+  ATTRACT
+  ENGAGE
+  CULTIVATE
+  GROW
+  RETAIN
+  ADVOCATE
+  LEGACY
+}
+
+// A plan's *purpose*, distinct from FrameworkStage (which is *where*
+// the donor sits in the relationship). A Major Gift Cultivation plan
+// and a Lapsed Donor Recovery plan can both apply to a donor in the
+// same stage — conflating purpose with stage was the real limitation
+// this fixes, not just an extra label.
+enum PlanType {
+  MAJOR_GIFT_CULTIVATION
+  LAPSED_DONOR_RECOVERY
+  PLANNED_GIVING
+  STEWARDSHIP
+  ONBOARDING
+  GENERAL
+}
+
+enum PlanStatus {
+  DRAFT
+  ACTIVE
+  COMPLETED
+  ARCHIVED
+}
+
+enum MilestoneStatus {
+  OPEN
+  IN_PROGRESS
+  DONE
+  BLOCKED
+}
+
+// A structured "why" for a milestone, distinct from its title — lets a
+// fundraiser (or a future report) see at a glance what kind of donor
+// touch this is, not just what it's called. Adapted from the same role
+// Gainsight's CTA "Reason" field plays, with values specific to donor
+// cultivation rather than generic B2B customer-success categories.
+enum MilestoneCategory {
+  CULTIVATION_CALL
+  STEWARDSHIP_TOUCH
+  ASK_CONVERSATION
+  THANK_YOU
+  EVENT_INVITATION
+  FOLLOW_UP
+  OTHER
+}
+
+model DonorSuccessPlan {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  donorId String
+  donor   Donor  @relation(fields: [donorId], references: [id], onDelete: Cascade)
+
+  title         String
+  stage         FrameworkStage @default(ENGAGE)
+  planType      PlanType       @default(GENERAL)
+  status        PlanStatus     @default(ACTIVE)
+  objective     String? // the overall goal in plain language
+  strategyNotes String? // approach / cadence / talking points
+
+  targetAskAmount      Decimal?  @db.Decimal(12, 2)
+  targetGiftDate       DateTime?
+  reviewCadence        String? // free text, e.g. "Monthly", "Quarterly"
+  startDate            DateTime  @default(now())
+  targetCompletionDate DateTime?
+
+  ownerId String
+  owner   User   @relation("PlanOwner", fields: [ownerId], references: [id])
+
+  createdById String
+  createdBy   User   @relation("PlanCreator", fields: [createdById], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  milestones PlanMilestone[]
+  comments   PlanComment[]
+
+  @@index([organizationId])
+  @@index([organizationId, donorId])
+  @@index([organizationId, status])
+  @@map("donor_success_plans")
+}
+
+model PlanMilestone {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  planId String
+  plan   DonorSuccessPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+
+  title       String
+  status      MilestoneStatus   @default(OPEN)
+  priority    TaskPriority      @default(MEDIUM)
+  category    MilestoneCategory @default(OTHER)
+  dueDate     DateTime?
+  notes       String?
+  completedAt DateTime?
+  sortOrder   Int               @default(0)
+
+  // Nullable — falls back to the plan's own owner when not set, so
+  // existing milestones (and new ones by default) don't require
+  // picking a separate assignee unless the plan actually needs one.
+  ownerId String?
+  owner   User?   @relation("MilestoneOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId])
+  @@index([planId])
+  @@map("plan_milestones")
+}
+
+// ── CRM Integrations ──────────────────────────────────────────────────
+// Phase 1 (connection only — see lib/integrations/salesforce.ts for the
+// full phased plan). One connection per provider per organization.
+// Tokens are encrypted at rest (lib/crypto.ts) — this is a genuinely
+// sensitive credential (broad read/write access to someone's Salesforce
+// org), not just another config value.
+
+enum CrmProvider {
+  SALESFORCE
+  // HUBSPOT, BLACKBAUD, etc. — added here as each gets built
+}
+
+enum CrmConnectionStatus {
+  CONNECTED
+  DISCONNECTED
+  ERROR
+}
+
+model CrmConnection {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  provider CrmProvider
+  status   CrmConnectionStatus @default(CONNECTED)
+
+  // Encrypted (AES-256-GCM, see lib/crypto.ts) — never store these in
+  // plaintext, and never log them.
+  accessTokenEncrypted  String
+  refreshTokenEncrypted String?
+
+  // Salesforce-specific: every API call must target this org's own
+  // instance (e.g. https://yourorg.my.salesforce.com), not a shared
+  // endpoint. Nullable so this model can generalize to future providers
+  // that don't have this concept.
+  instanceUrl String?
+
+  tokenExpiresAt DateTime?
+  lastSyncedAt   DateTime?
+  lastError      String?
+
+  // Set once the one-time full Account backfill has completed — Account
+  // syncing was added after this connection may have already been
+  // running incrementally, so on the first sync after that change,
+  // Accounts need a full historical pull (since epoch) rather than the
+  // normal "since lastSyncedAt" incremental window, or existing
+  // Salesforce orgs would silently never get their pre-existing Accounts
+  // synced at all. Every sync after this field is set behaves normally
+  // (incremental, same as Contacts/Opportunities already did).
+  accountBackfillCompletedAt DateTime?
+
+  // Opt-in — null means "pull everyone," matching the exact behavior
+  // every existing connection already has today. Only when a tenant
+  // explicitly sets this does the sync start skipping Contacts/Accounts
+  // with no won-Opportunity giving activity within that many years.
+  // Deliberately not defaulted to a value like 5 here, since that would
+  // silently change what an already-connected org's sync pulls in
+  // without them ever choosing that.
+  minGivingHistoryYears Int?
+
+  connectedById String
+  connectedBy   User   @relation(fields: [connectedById], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([organizationId, provider])
+  @@index([organizationId])
+  @@map("crm_connections")
+}
+
+// ── Email integration ──────────────────────────────────────────────────
+// Deliberately per-USER, not per-organization, unlike CrmConnection
+// above — when a fundraiser emails a donor, it needs to come from
+// *their* inbox (so replies land with them, so it doesn't look like
+// spam from a shared noreply-style account), not a shared org account.
+
+enum EmailProvider {
+  GMAIL
+  OUTLOOK
+}
+
+model EmailConnection {
+  id     String @id @default(cuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  provider     EmailProvider
+  emailAddress String // the actual connected address, shown back to the user for confirmation
+
+  // Encrypted (AES-256-GCM, see lib/crypto.ts) — same reasoning as
+  // CrmConnection: these tokens grant real send-as-you access.
+  accessTokenEncrypted  String
+  refreshTokenEncrypted String?
+  tokenExpiresAt        DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("email_connections")
+}
+
+model EmailTemplate {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  name    String
+  subject String
+  body    String @db.Text
+
+  // Loose targeting, not a hard filter — used to surface "suggested"
+  // templates first when composing for a given donor, not to restrict
+  // which templates can be used for them.
+  suggestedForRisk RetentionRisk?
+  campaignId       String?
+  campaign         Campaign? @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  sequenceSteps SequenceTemplateStep[]
+
+  @@index([organizationId])
+  @@map("email_templates")
+}
+
+// ── Organization donor contacts ─────────────────────────────────────────
+// A "contact" here is a real person at an organization/foundation/
+// corporation donor (e.g. their CEO, philanthropy director) — distinct
+// from the Donor record itself, which represents the entity being
+// cultivated. Only meaningful for org-type donors; nothing prevents
+// attaching one to an INDIVIDUAL donor at the data level, but the UI
+// only surfaces this section for ORGANIZATION/FOUNDATION/CORPORATION.
+
+enum ContactType {
+  EXECUTIVE
+  INFLUENCER
+  DONOR
+  ADVOCATE
+}
+
+// Distinct from ContactType, which is about this person's role or
+// position (executive, influencer, etc.) — EngagementStyle is about
+// how they're best cultivated: a Driver wants to see results and make
+// the decision, a Dreamer responds to vision and the mission's big
+// picture, a Doer wants to be hands-on and involved. A single contact
+// can be both an Executive (their role) and a Driver (how to actually
+// engage them) — these aren't alternatives to each other.
+enum EngagementStyle {
+  DRIVER
+  DREAMER
+  DOER
+}
+
+model DonorContact {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  donorId String
+  donor   Donor  @relation(fields: [donorId], references: [id], onDelete: Cascade)
+
+  firstName       String
+  lastName        String
+  title           String?
+  email           String?
+  phone           String?
+  contactType     ContactType?
+  engagementStyle EngagementStyle?
+  isPrimary       Boolean          @default(false)
+  notes           String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId])
+  @@index([organizationId, donorId])
+  @@map("donor_contacts")
+}
+
+// ── Donor affiliations ───────────────────────────────────────────────────
+// Tags a donor's connection to an organization (or another donor) —
+// deliberately free-text-first: affiliateName is always required and
+// always shown, since most affiliated entities (an employer, a family
+// foundation) won't already exist as their own Donor record here.
+// affiliatedDonorId is an optional bonus link for when the affiliated
+// org *is* also a donor in this system, enabling direct navigation
+// between the two records.
+
+enum AffiliationType {
+  EMPLOYER
+  BOARD_MEMBER
+  FAMILY_FOUNDATION
+  SUBSIDIARY
+  PARENT_COMPANY
+  OTHER
+}
+
+model DonorAffiliation {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  donorId String
+  donor   Donor  @relation("DonorAffiliations", fields: [donorId], references: [id], onDelete: Cascade)
+
+  // Optional — only set when the affiliated org/person happens to
+  // already be a Donor record in this system.
+  affiliatedDonorId String?
+  affiliatedDonor   Donor?  @relation("AffiliatedWithDonor", fields: [affiliatedDonorId], references: [id], onDelete: SetNull)
+
+  affiliateName   String // always required, even when affiliatedDonorId is also set
+  affiliationType AffiliationType?
+  roleTitle       String? // e.g. "Board Member", "VP of Marketing" — free text
+  notes           String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId])
+  @@index([organizationId, donorId])
+  @@map("donor_affiliations")
+}
+
+// ── Wealth screening (WealthEngine / Altrata) ───────────────────────────
+// API-key based, unlike the OAuth integrations elsewhere in this file —
+// WealthEngine doesn't have a self-serve OAuth flow; access is
+// purchased through their sales team, who provide a straight API key.
+// One connection per organization (like Salesforce, not per-user like
+// email) since wealth screening is an org-wide paid capability, not a
+// personal one.
+
+model WealthEngineConnection {
+  id             String       @id @default(cuid())
+  organizationId String       @unique
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  // Encrypted (AES-256-GCM, see lib/crypto.ts) — same reasoning as
+  // every other stored credential in this file.
+  apiKeyEncrypted String
+
+  // Configurable rather than hardcoded — WealthEngine's exact base URL
+  // depends on account setup (sandbox vs. production), and isn't
+  // something to guess at without a real account to verify against.
+  baseUrl String @default("https://api.wealthengine.com")
+
+  connectedById String
+  connectedBy   User   @relation(fields: [connectedById], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("wealth_engine_connections")
+}
+
+// ── Success Sequences ────────────────────────────────────────────────────
+// Reusable, template-based donor stewardship playbooks. Deliberately
+// NOT full automation: every step still requires an explicit "Send"
+// click through the existing email-send action — this is a queuing and
+// surfacing layer on top of infrastructure that already exists
+// (EmailTemplate, the send action, merge fields), not a new way to
+// contact a donor without a human in the loop.
+
+enum SequenceEnrollmentStatus {
+  ACTIVE
+  COMPLETED
+  ENDED_EARLY
+}
+
+model SequenceTemplate {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  name        String
+  description String?
+
+  // Same loose-targeting pattern as EmailTemplate.suggestedForRisk —
+  // when a donor's retention risk matches and they have no active
+  // sequence already, this template surfaces as a *suggestion* on that
+  // donor's page, never an automatic enrollment.
+  suggestedForRisk RetentionRisk?
+
+  steps       SequenceTemplateStep[]
+  enrollments DonorSequenceEnrollment[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId])
+  @@map("sequence_templates")
+}
+
+model SequenceTemplateStep {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  sequenceTemplateId String
+  sequenceTemplate   SequenceTemplate @relation(fields: [sequenceTemplateId], references: [id], onDelete: Cascade)
+
+  // Restrict, not Cascade — deleting an EmailTemplate that's actively
+  // used in a sequence step should fail loudly (with a friendly message
+  // from the delete action, not a raw constraint error) rather than
+  // silently leaving a step with a broken reference.
+  emailTemplateId String
+  emailTemplate   EmailTemplate @relation(fields: [emailTemplateId], references: [id], onDelete: Restrict)
+
+  sortOrder Int // 0-based order within the sequence
+  dayOffset Int // days after enrollment this step becomes due
+
+  createdAt DateTime @default(now())
+
+  @@index([organizationId])
+  @@index([sequenceTemplateId])
+  @@map("sequence_template_steps")
+}
+
+model DonorSequenceEnrollment {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  donorId String
+  donor   Donor  @relation(fields: [donorId], references: [id], onDelete: Cascade)
+
+  // Restrict — a template with any enrollment history (even completed)
+  // shouldn't be deletable out from under that history.
+  sequenceTemplateId String
+  sequenceTemplate   SequenceTemplate @relation(fields: [sequenceTemplateId], references: [id], onDelete: Restrict)
+
+  status    SequenceEnrollmentStatus @default(ACTIVE)
+  startedAt DateTime                 @default(now())
+  // 0-based, matches SequenceTemplateStep.sortOrder — the step due
+  // next. Advances by one each time a step is sent; once it exceeds
+  // the template's step count, status flips to COMPLETED.
+  currentStepOrder Int       @default(0)
+  endedAt          DateTime?
+
+  enrolledById String
+  enrolledBy   User   @relation("SequenceEnrolledBy", fields: [enrolledById], references: [id])
+
+  stepLogs DonorSequenceStepLog[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId])
+  @@index([organizationId, donorId])
+  @@index([organizationId, status])
+  @@map("donor_sequence_enrollments")
+}
+
+model DonorSequenceStepLog {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  enrollmentId String
+  enrollment   DonorSequenceEnrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+
+  stepOrder Int
+  sentAt    DateTime @default(now())
+
+  sentById String
+  sentBy   User   @relation("SequenceStepSentBy", fields: [sentById], references: [id])
+
+  @@index([organizationId])
+  @@index([enrollmentId])
+  @@map("donor_sequence_step_logs")
+}
+
+// ── Grant Opportunities (pre-award pipeline) ────────────────────────────
+// Phase 1 of grants management: the application pipeline, with a
+// requirements checklist per opportunity. A deliberately separate model
+// from Opportunity rather than an extension of it — grants have enough
+// of their own shape (funder requirements, an award-to-compliance
+// transition still to come in Phase 2) that folding them into the
+// existing major-gift Opportunity table would mean a lot of grant-only
+// fields sitting null on every regular gift opportunity.
+
+enum GrantStage {
+  RESEARCHING
+  LOI_SUBMITTED
+  PROPOSAL_SUBMITTED
+  AWARDED
+  DECLINED
+}
+
+model GrantOpportunity {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  // The funder — always a Foundation/Corporation-type Donor. Not
+  // enforced at the schema level (Prisma has no way to restrict a
+  // relation to a subset of rows by another field), checked in the
+  // create/edit action instead.
+  donorId String
+  donor   Donor  @relation(fields: [donorId], references: [id], onDelete: Cascade)
+
+  name                 String // e.g. "Youth Literacy Initiative"
+  programName          String? // a specific program within the funder, if they have one
+  askAmount            Decimal    @db.Decimal(12, 2)
+  stage                GrantStage @default(RESEARCHING)
+  applicationDeadline  DateTime?
+  decisionExpectedDate DateTime?
+  decidedAt            DateTime?
+  declineReason        String?
+  notes                String?
+
+  // Phase 1's single owner — the person managing the application. A
+  // separate complianceOwnerId arrives in Phase 2, once there's
+  // something post-award to own.
+  grantWriterId String
+  grantWriter   User   @relation("GrantWriter", fields: [grantWriterId], references: [id])
+
+  requirements GrantRequirement[]
+  grant        Grant?
+  documents    GrantDocument[]
+  comments     GrantComment[]
+  tasks        Task[]
+  reminderLogs GrantReminderLog[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId])
+  @@index([organizationId, stage])
+  @@map("grant_opportunities")
+}
+
+model GrantRequirement {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  grantOpportunityId String
+  grantOpportunity   GrantOpportunity @relation(fields: [grantOpportunityId], references: [id], onDelete: Cascade)
+
+  name       String // e.g. "Letter of Intent", "Board resolution", "Audited financials"
+  dueDate    DateTime?
+  isComplete Boolean   @default(false)
+  sortOrder  Int
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  documents GrantDocument[]
+
+  @@index([organizationId])
+  @@index([grantOpportunityId])
+  @@map("grant_requirements")
+}
+
+// ── Grants (Phase 2: post-award) ────────────────────────────────────────
+// Created by converting an Awarded GrantOpportunity — the moment a
+// grant is won is the starting gun for a new set of obligations
+// (interim reports, financial reconciliation, site visits), not the
+// finish line the way a regular major gift closing is. That's why this
+// is tracked as its own record with its own compliance plan, rather
+// than treating "Awarded" as the end of the GrantOpportunity's story.
+
+model Grant {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  // One-to-one — a Grant always originates from exactly one Awarded
+  // GrantOpportunity. Restrict, not Cascade: deleting the original
+  // opportunity record shouldn't be able to take a real, possibly
+  // multi-year, awarded grant down with it.
+  grantOpportunityId String           @unique
+  grantOpportunity   GrantOpportunity @relation(fields: [grantOpportunityId], references: [id], onDelete: Restrict)
+
+  donorId String
+  donor   Donor  @relation(fields: [donorId], references: [id], onDelete: Cascade)
+
+  name               String // carried over from the opportunity at conversion time
+  awardAmount        Decimal   @db.Decimal(12, 2)
+  periodStart        DateTime
+  periodEnd          DateTime?
+  restrictedUseNotes String?
+
+  // Two distinct roles, not one — the grant writer who managed the
+  // application is frequently a different person from whoever owns
+  // ongoing compliance reporting once the money actually arrives.
+  grantWriterId String
+  grantWriter   User   @relation("GrantWriterOnGrant", fields: [grantWriterId], references: [id])
+
+  complianceOwnerId String
+  complianceOwner   User   @relation("ComplianceOwner", fields: [complianceOwnerId], references: [id])
+
+  milestones GrantMilestone[]
+  gifts      Gift[]
+  budgetLines GrantBudgetLine[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId])
+  @@map("grants")
+}
+
+model GrantMilestone {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  grantId String
+  grant   Grant  @relation(fields: [grantId], references: [id], onDelete: Cascade)
+
+  name        String // e.g. "Interim report - Year 1", "Site visit", "Final report and financial reconciliation"
+  dueDate     DateTime
+  isComplete  Boolean   @default(false)
+  completedAt DateTime?
+  sortOrder   Int
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  documents GrantDocument[]
+
+  @@index([organizationId])
+  @@index([grantId])
+  @@map("grant_milestones")
+}
+
+// ── Grant documents ──────────────────────────────────────────────────────
+// Attached to a GrantOpportunity (so this works whether the grant is
+// pre- or post-award), optionally to a specific requirement or
+// milestone — the actual LOI you submitted, the interim report you
+// filed, the signed award letter. Only one of requirementId/milestoneId
+// should ever be set (enforced in the action, not the schema — Prisma
+// has no XOR constraint); neither set means a general grant-level
+// document not tied to a specific checklist item.
+
+model GrantDocument {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  grantOpportunityId String
+  grantOpportunity   GrantOpportunity @relation(fields: [grantOpportunityId], references: [id], onDelete: Cascade)
+
+  requirementId String?
+  requirement   GrantRequirement? @relation(fields: [requirementId], references: [id], onDelete: SetNull)
+  milestoneId   String?
+  milestone     GrantMilestone?   @relation(fields: [milestoneId], references: [id], onDelete: SetNull)
+
+  fileName String
+  fileUrl  String  // Vercel Blob URL — kept for reference/display only; not directly fetchable for private blobs
+  pathname String? // required to actually fetch the file via get() from a private store — nullable to stay safe against any pre-existing rows from before this field existed
+  fileSize Int    // bytes
+  mimeType String?
+
+  uploadedById String
+  uploadedBy   User   @relation(fields: [uploadedById], references: [id])
+
+  createdAt DateTime @default(now())
+
+  expenses GrantExpense[]
+
+  @@index([organizationId])
+  @@index([grantOpportunityId])
+  @@index([requirementId])
+  @@index([milestoneId])
+  @@map("grant_documents")
+}
+
+// ── Grant comments (collaboration) ──────────────────────────────────────
+// A deliberately simple running log on a GrantOpportunity — not real-time
+// chat, no threading/replies, no @mentions. authorId is nullable
+// specifically to allow system-generated entries (stage changes,
+// milestone completions, disbursements) to appear in the same feed as
+// manual notes, labeled "System" in the UI rather than a person's name.
+
+model GrantComment {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  grantOpportunityId String
+  grantOpportunity   GrantOpportunity @relation(fields: [grantOpportunityId], references: [id], onDelete: Cascade)
+
+  content           String
+  isSystemGenerated Boolean @default(false)
+
+  // Null only for system-generated entries — every manual comment has
+  // a real author. SetNull rather than Cascade: a comment shouldn't
+  // disappear just because the person who wrote it later left the org.
+  authorId String?
+  author   User?   @relation(fields: [authorId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([organizationId])
+  @@index([grantOpportunityId])
+  @@map("grant_comments")
+}
+
+// ── Grant financial management (budget & expenses) ──────────────────────
+// The "money out" half of grant tracking — Gift records (via
+// Grant.gifts) already handle money coming in as disbursements. A
+// GrantBudgetLine is a planned allocation ("Program staff salaries",
+// "Materials and supplies"); a GrantExpense is actual spending logged
+// against one, optionally with a receipt via the existing
+// GrantDocument system.
+
+model GrantBudgetLine {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  grantId String
+  grant   Grant  @relation(fields: [grantId], references: [id], onDelete: Cascade)
+
+  name           String
+  budgetedAmount Decimal @db.Decimal(12, 2)
+  sortOrder      Int
+
+  expenses GrantExpense[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId])
+  @@index([grantId])
+  @@map("grant_budget_lines")
+}
+
+model GrantExpense {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  budgetLineId String
+  budgetLine   GrantBudgetLine @relation(fields: [budgetLineId], references: [id], onDelete: Cascade)
+
+  amount      Decimal  @db.Decimal(12, 2)
+  date        DateTime
+  description String?
+
+  // Optional link to the receipt/supporting document, reusing the
+  // system already built rather than a separate upload path.
+  documentId String?
+  document   GrantDocument? @relation(fields: [documentId], references: [id], onDelete: SetNull)
+
+  loggedById String
+  loggedBy   User   @relation(fields: [loggedById], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@index([organizationId])
+  @@index([budgetLineId])
+  @@map("grant_expenses")
+}
+
+// ── Grant deadline reminders ─────────────────────────────────────────────
+// Tracks which (item, threshold) reminders have already been sent, so a
+// daily cron re-running (retry, redeploy, clock drift) can never email
+// the same "7 days out" notice twice — checked before every send, not
+// relied on to self-correct after the fact.
+
+enum GrantReminderSourceType {
+  REQUIREMENT
+  MILESTONE
+  APPLICATION_DEADLINE
+  DECISION_EXPECTED
+}
+
+model GrantReminderLog {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  grantOpportunityId String
+  grantOpportunity   GrantOpportunity @relation(fields: [grantOpportunityId], references: [id], onDelete: Cascade)
+
+  sourceType GrantReminderSourceType
+  // The requirement or milestone ID this reminder was for. For the two
+  // GrantOpportunity-level date fields (APPLICATION_DEADLINE,
+  // DECISION_EXPECTED), which aren't their own row to reference, this
+  // is set to a fixed sentinel string ("application_deadline" /
+  // "decision_expected") rather than left null — Postgres treats NULL
+  // as distinct from NULL in a unique constraint, so a nullable
+  // sourceId here would silently defeat the dedup guarantee below for
+  // exactly those two cases.
+  sourceId String
+
+  // Days before the deadline this reminder represents — 14, 7, 3, or 0
+  // for "just became overdue."
+  threshold Int
+
+  sentAt DateTime @default(now())
+
+  @@index([organizationId])
+  // The actual dedup check: has this exact item+threshold combination
+  // already been sent, ever.
+  @@unique([grantOpportunityId, sourceType, sourceId, threshold])
+  @@map("grant_reminder_logs")
+}
+
+// ── Success Plan comments (collaboration) ───────────────────────────────
+// Same shape and reasoning as GrantComment — a simple running log, not
+// real-time chat or threading. authorId is nullable specifically for
+// system-generated entries (stage/status changes, milestone
+// completions) so they appear in the same feed as manual notes,
+// labeled "System" rather than a person's name.
+
+model PlanComment {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  planId String
+  plan   DonorSuccessPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+
+  content           String
+  isSystemGenerated Boolean @default(false)
+
+  authorId String?
+  author   User?   @relation(fields: [authorId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([organizationId])
+  @@index([planId])
+  @@map("plan_comments")
+}
+
+// ── Success Plan templates ──────────────────────────────────────────────
+// Mirrors SequenceTemplate/SequenceTemplateStep exactly — a reusable
+// set of milestones a fundraiser applies to a plan instead of building
+// one from scratch every time. dayOffset works the same way as
+// SequenceTemplateStep.dayOffset: a template has no real dates of its
+// own, only relative day offsets from whatever plan it's later applied
+// to.
+
+model PlanTemplate {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  name        String
+  description String?
+
+  // Which plan purpose this template is designed for — used to suggest
+  // it contextually when creating a plan of that type, never to
+  // restrict applying it elsewhere.
+  planType PlanType?
+
+  milestoneTemplates PlanTemplateMilestone[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId])
+  @@map("plan_templates")
+}
+
+model PlanTemplateMilestone {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  planTemplateId String
+  planTemplate   PlanTemplate @relation(fields: [planTemplateId], references: [id], onDelete: Cascade)
+
+  title    String
+  category MilestoneCategory @default(OTHER)
+  priority TaskPriority      @default(MEDIUM)
+  notes    String?
+
+  sortOrder Int // 0-based order within the template
+  dayOffset Int // days after the plan's start date this milestone becomes due
+
+  createdAt DateTime @default(now())
+
+  @@index([organizationId])
+  @@index([planTemplateId])
+  @@map("plan_template_milestones")
+}
+
+// ── Executive briefing ───────────────────────────────────────────────────
+// One row per organization, regenerated daily by a cron rather than on
+// every dashboard view — an AI call on every page load would add real,
+// avoidable latency to the single most-viewed page in the app, and
+// real avoidable API spend. The dashboard just displays whatever the
+// most recent generatedAt snapshot says, with that timestamp visible
+// so it's never presented as more current than it is.
+
+model ExecutiveBriefingSnapshot {
+  id             String       @id @default(cuid())
+  organizationId String       @unique
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  content     String // the generated narrative
+  modelUsed   String // which model produced this, for future debugging/auditing
+  generatedAt DateTime @default(now())
+
+  @@map("executive_briefing_snapshots")
+}
+
+// ── Board Engagement ─────────────────────────────────────────────────────
+// A board member is a Donor, not a separate Person or generic entity —
+// board members are expected to give, and staff already look at the
+// Donor record for anyone's giving history. Board-specific data
+// (terms, commitments, introductions) attaches to that same Donor
+// record rather than creating a second, disconnected identity for the
+// same real person.
+
+enum BoardRole {
+  CHAIR
+  VICE_CHAIR
+  TREASURER
+  SECRETARY
+  COMMITTEE_CHAIR
+  MEMBER
+}
+
+enum CommitmentType {
+  GIVE         // a personal giving commitment
+  GET          // fundraise or solicit from others
+  ATTEND       // meeting/event attendance commitment
+  VOLUNTEER
+  INTRODUCTION // commit to making a target number of introductions
+}
+
+enum CommitmentStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  FULFILLED
+  MISSED
+}
+
+enum IntroductionStatus {
+  SUGGESTED  // a possible match, not yet acted on
+  REQUESTED  // asked the board member to make it
+  MADE       // the introduction actually happened
+  MEETING_HELD
+  DECLINED
+}
+
+model Board {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  name      String // e.g. "2026 Board of Directors"
+  startDate DateTime
+  endDate   DateTime?
+  isActive  Boolean  @default(true)
+
+  committees Committee[]
+  meetings   BoardMeeting[]
+  terms      BoardTerm[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId])
+  @@map("boards")
+}
+
+model Committee {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  boardId String
+  board   Board  @relation(fields: [boardId], references: [id], onDelete: Cascade)
+
+  name String // e.g. "Governance", "Finance", "Development"
+
+  memberships CommitteeMembership[]
+  meetings    BoardMeeting[]
+
+  createdAt DateTime @default(now())
+
+  @@index([organizationId])
+  @@index([boardId])
+  @@map("committees")
+}
+
+// One row per board member per board — a donor who serves across
+// multiple board years has one BoardTerm per year, preserving real
+// history rather than overwriting a single "current term" record.
+model BoardTerm {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  boardId String
+  board   Board  @relation(fields: [boardId], references: [id], onDelete: Cascade)
+
+  donorId String
+  donor   Donor  @relation(fields: [donorId], references: [id], onDelete: Cascade)
+
+  // A board member commonly serves on more than one committee at once
+  // — this is a many-to-many via CommitteeMembership below, not a
+  // single FK.
+  committeeMemberships CommitteeMembership[]
+
+  role         BoardRole @default(MEMBER)
+  startDate    DateTime
+  endDate      DateTime?
+  votingMember Boolean   @default(true)
+  isActive     Boolean   @default(true)
+
+  commitments    BoardCommitment[]
+  introductions  BoardIntroduction[]
+  tasks          Task[]
+  meetingAttendance BoardMeetingAttendance[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId])
+  @@index([boardId])
+  @@index([donorId])
+  @@map("board_terms")
+}
+
+model BoardCommitment {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  boardTermId String
+  boardTerm   BoardTerm @relation(fields: [boardTermId], references: [id], onDelete: Cascade)
+
+  type        CommitmentType
+  description String
+  // Only one of these two is typically set, depending on type (GIVE/GET
+  // use targetAmount; ATTEND/VOLUNTEER/INTRODUCTION use targetCount) —
+  // not enforced at the schema level, since the right combination
+  // depends on how a tenant actually defines a given commitment.
+  targetAmount Decimal? @db.Decimal(12, 2)
+  targetCount  Int?
+
+  dueDate DateTime?
+  status  CommitmentStatus @default(NOT_STARTED)
+
+  // Separates whether OTHER board members/staff can see this specific
+  // commitment at all from whether private amounts are visible —
+  // enforcement is future portal work, but the field exists now so it
+  // doesn't need a migration later.
+  isConfidential Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId])
+  @@index([boardTermId])
+  @@map("board_commitments")
+}
+
+model BoardIntroduction {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  boardTermId String
+  boardTerm   BoardTerm @relation(fields: [boardTermId], references: [id], onDelete: Cascade)
+
+  // The prospect being introduced — an existing Donor record. If the
+  // prospect isn't in the system yet, add them as a donor first rather
+  // than inventing a parallel "prospect" entity, matching the same
+  // reasoning used for grant funder matching during CSV import.
+  prospectDonorId String
+  prospectDonor   Donor  @relation("IntroductionProspect", fields: [prospectDonorId], references: [id], onDelete: Cascade)
+
+  status      IntroductionStatus @default(SUGGESTED)
+  requestedAt DateTime?
+  completedAt DateTime?
+  outcome     String?
+  notes       String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId])
+  @@index([boardTermId])
+  @@index([prospectDonorId])
+  @@map("board_introductions")
+}
+
+// A board member can serve on more than one committee at once — this
+// join table is what makes that possible, replacing what was
+// originally a single committeeId FK on BoardTerm.
+model CommitteeMembership {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  boardTermId String
+  boardTerm   BoardTerm @relation(fields: [boardTermId], references: [id], onDelete: Cascade)
+
+  committeeId String
+  committee   Committee @relation(fields: [committeeId], references: [id], onDelete: Cascade)
+
+  isChair Boolean @default(false)
+
+  createdAt DateTime @default(now())
+
+  @@unique([boardTermId, committeeId])
+  @@index([organizationId])
+  @@map("committee_memberships")
+}
+
+enum AttendanceStatus {
+  ATTENDED
+  EXCUSED
+  ABSENT
+}
+
+enum AttendanceMethod {
+  IN_PERSON
+  VIRTUAL
+  PHONE
+}
+
+// One row per board or committee meeting. `notes` holds general
+// meeting minutes/notes — kept as a single field rather than a whole
+// comment/activity-log system, matching how DonorSuccessPlan.strategyNotes
+// is a plain field rather than its own subsystem; a meeting's minutes
+// don't need the same kind of running, multi-author activity feed a
+// donor or grant record does.
+model BoardMeeting {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  boardId String
+  board   Board  @relation(fields: [boardId], references: [id], onDelete: Cascade)
+
+  // Optional — a meeting can be a full board meeting (null) or a
+  // specific committee's meeting.
+  committeeId String?
+  committee   Committee? @relation(fields: [committeeId], references: [id], onDelete: SetNull)
+
+  title String // e.g. "Q3 Board Meeting", "Finance Committee — September"
+  date  DateTime
+  notes String?
+
+  attendance BoardMeetingAttendance[]
+  documents  BoardMeetingDocument[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId])
+  @@index([boardId])
+  @@map("board_meetings")
+}
+
+// Linked to a BoardTerm, not directly to a Donor — attendance ties to
+// whichever term the person was actually serving under at the time,
+// consistent with how BoardCommitment and BoardIntroduction already
+// link through BoardTerm rather than Donor directly.
+model BoardMeetingAttendance {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  meetingId String
+  meeting   BoardMeeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+
+  boardTermId String
+  boardTerm   BoardTerm @relation(fields: [boardTermId], references: [id], onDelete: Cascade)
+
+  status AttendanceStatus @default(ATTENDED)
+  method AttendanceMethod?
+
+  createdAt DateTime @default(now())
+
+  @@unique([meetingId, boardTermId])
+  @@index([organizationId])
+  @@index([boardTermId])
+  @@map("board_meeting_attendance")
+}
+
+// Agenda/minutes attachments for a board meeting — mirrors GrantDocument
+// exactly (private Vercel Blob storage, served only through an
+// authenticated proxy route, never the raw blob URL).
+model BoardMeetingDocument {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  meetingId String
+  meeting   BoardMeeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+
+  fileName String
+  fileUrl  String  // kept for reference/display only; not directly fetchable for private blobs
+  pathname String? // required to actually fetch the file via get() from a private store
+  fileSize Int     // bytes
+  mimeType String?
+
+  uploadedById String
+  uploadedBy   User   @relation(fields: [uploadedById], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@index([organizationId])
+  @@index([meetingId])
+  @@map("board_meeting_documents")
+}
+
+// ── Configurable nav visibility ──────────────────────────────────────────
+// Presence of a row means that nav item is HIDDEN for that role in that
+// organization — absence means visible, which is the default and matches
+// every organization's behavior today (nobody has any rows yet). Owner
+// is deliberately never checked against this at all (enforced in code,
+// not the schema) — hiding Settings from every other role and then also
+// hiding it from Owner would make the configuration impossible for
+// anyone to ever undo.
+model HiddenNavItem {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  role    Role
+  navHref String // matches NavItem.href in lib/nav.ts, e.g. "/board"
+
+  createdAt DateTime @default(now())
+
+  @@unique([organizationId, role, navHref])
+  @@index([organizationId])
+  @@map("hidden_nav_items")
+}
+
+// ── Volunteer Hours ───────────────────────────────────────────────────────
+// Tracked as its own distinct record type, deliberately separate from
+// Gift — volunteer hours are a real, valuable form of support, but
+// under US GAAP (ASC 958-605) ordinary volunteer time generally can't
+// be recognized as contribution revenue the way a cash gift can. This
+// exists for the same purpose Independent Sector's own published rate
+// is actually used for industry-wide: grant reporting, board/impact
+// reporting, and donor engagement signal — never silently blended into
+// a donor's lifetimeGiving or the org's audited revenue figures.
+model VolunteerHours {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  donorId String
+  donor   Donor  @relation(fields: [donorId], references: [id], onDelete: Cascade)
+
+  date     DateTime
+  hours    Decimal @db.Decimal(6, 2)
+  activity String // free-text description, e.g. "Staffed the fall gala check-in table"
+
+  // Captured at the time this entry was logged, not derived live from
+  // Organization.volunteerHourlyRate — Independent Sector republishes
+  // their national rate every year, and a 2025 entry's dollar value
+  // should always reflect the 2025 rate, not whatever the current one
+  // happens to be when someone looks at it later. dollarValue is
+  // simply hours * hourlyRateApplied, stored redundantly so reports
+  // never need to re-derive it (or get it wrong when the org's rate
+  // setting changes after the fact).
+  hourlyRateApplied Decimal @db.Decimal(6, 2)
+  dollarValue       Decimal @db.Decimal(10, 2)
+
+  loggedById String
+  loggedBy   User   @relation(fields: [loggedById], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId])
+  @@index([donorId])
+  @@map("volunteer_hours")
+}
+
+// ── AI Insights chat ──────────────────────────────────────────────────────
+// A session per conversation, mainly so a page refresh doesn't lose the
+// thread and there's a record of what was asked — this is deliberately
+// lightweight, not a full analytics/audit system.
+model ChatSession {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  title String? // first question, truncated — set once, shown in a future session list if one gets built
+
+  messages ChatMessage[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId])
+  @@index([userId])
+  @@map("chat_sessions")
+}
+
+enum ChatRole {
+  USER
+  ASSISTANT
+}
+
+model ChatMessage {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  sessionId String
+  session   ChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  role    ChatRole
+  content String
+
+  // Which tools were called to produce this answer (assistant messages
+  // only) — a plain string array of tool names, not full call/response
+  // payloads. This is for showing "checked donor retention data"-style
+  // transparency in the UI, not a debugging log; storing full tool
+  // inputs/outputs would mean re-storing donor data outside the tables
+  // that are supposed to be the source of truth for it.
+  toolsUsed String[]
+
+  createdAt DateTime @default(now())
+
+  @@index([organizationId])
+  @@index([sessionId])
+  @@map("chat_messages")
+}

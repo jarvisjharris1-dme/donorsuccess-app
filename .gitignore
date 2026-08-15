@@ -1,0 +1,11 @@
+node_modules
+.next
+out
+.vercel
+*.log
+.DS_Store
+.env
+.env.local
+prisma/dev.db
+donorsuccess-app2/
+*.tsbuildinfo
