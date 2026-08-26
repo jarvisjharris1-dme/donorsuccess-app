@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { getOrder } from '@/lib/orders';
-import { provisionOrderAction, updateOrderStatusAction } from '@/lib/actions/orders';
+import { provisionOrderAction, retryOwnerInvitationAction, updateOrderStatusAction } from '@/lib/actions/orders';
 
 function money(cents: number | null) {
   if (cents == null) return '—';
@@ -19,11 +19,24 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
 
   const products = order.productsJson ? (JSON.parse(order.productsJson) as string[]) : [];
   const canProvision = ['SIGNED', 'FAILED'].includes(order.status) && !order.organizationId;
+  const needsInvitationRetry = Boolean(order.organizationId) && !order.invitationSentAt;
   const completedSteps = [
     Boolean(order.signedAt), Boolean(order.organizationId), Boolean(order.entitlementsProvisionedAt),
     Boolean(order.invitationSentAt), Boolean(order.onboardingStartedAt), Boolean(order.fulfilledAt),
   ].filter(Boolean).length;
   const progress = Math.round((completedSteps / 6) * 100);
+
+  const nextAction = canProvision
+    ? 'The agreement is signed. Provision the customer workspace and invite the owner.'
+    : needsInvitationRetry
+      ? `The customer workspace exists, but the owner invitation has not been confirmed as sent. Retry the invitation to ${order.ownerEmail}.`
+      : order.status === 'READY_FOR_KICKOFF'
+        ? 'Customer workspace is ready. Start implementation when onboarding begins.'
+        : order.status === 'IMPLEMENTATION'
+          ? 'Implementation is underway. Mark fulfilled when launch work is complete.'
+          : order.status === 'FULFILLED'
+            ? 'Customer fulfillment is complete.'
+            : 'Waiting for the next lifecycle milestone.';
 
   return (
     <div className="space-y-7">
@@ -72,10 +85,11 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
 
         <section className="rounded-2xl border border-gray-800 bg-gray-800/40 p-5">
           <h2 className="text-base font-bold text-white">Next action</h2>
-          <p className="mt-2 text-sm leading-6 text-gray-400">{canProvision ? 'The agreement is signed. Provision the customer workspace and invite the owner.' : order.status === 'READY_FOR_KICKOFF' ? 'Customer workspace is ready. Start implementation when onboarding begins.' : order.status === 'IMPLEMENTATION' ? 'Implementation is underway. Mark fulfilled when launch work is complete.' : order.status === 'FULFILLED' ? 'Customer fulfillment is complete.' : 'Waiting for the next lifecycle milestone.'}</p>
+          <p className="mt-2 text-sm leading-6 text-gray-400">{nextAction}</p>
           {canProvision && <form action={provisionOrderAction} className="mt-6"><input type="hidden" name="orderId" value={order.id} /><button type="submit" className="w-full rounded-xl bg-evergreen px-4 py-3 text-sm font-bold text-white hover:bg-[#0d685f]">Provision Customer</button></form>}
-          {order.organizationId && order.status === 'READY_FOR_KICKOFF' && <StatusButton orderId={order.id} status="IMPLEMENTATION" label="Start Implementation" />}
-          {order.status === 'IMPLEMENTATION' && <StatusButton orderId={order.id} status="FULFILLED" label="Mark Fulfilled" />}
+          {needsInvitationRetry && <form action={retryOwnerInvitationAction} className="mt-6"><input type="hidden" name="orderId" value={order.id} /><button type="submit" className="w-full rounded-xl bg-amber-500 px-4 py-3 text-sm font-bold text-gray-950 hover:bg-amber-400">Retry Owner Invitation</button></form>}
+          {!needsInvitationRetry && order.organizationId && order.status === 'READY_FOR_KICKOFF' && <StatusButton orderId={order.id} status="IMPLEMENTATION" label="Start Implementation" />}
+          {!needsInvitationRetry && order.status === 'IMPLEMENTATION' && <StatusButton orderId={order.id} status="FULFILLED" label="Mark Fulfilled" />}
         </section>
       </div>
 
@@ -85,7 +99,7 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
           <Milestone label="Contract signed" done={Boolean(order.signedAt)} detail={when(order.signedAt)} />
           <Milestone label="Organization created" done={Boolean(order.organizationId)} detail={order.organizationId ? 'Customer workspace active' : 'Pending provisioning'} />
           <Milestone label={`${order.subscriptionTier} + product entitlements`} done={Boolean(order.entitlementsProvisionedAt)} detail={when(order.entitlementsProvisionedAt)} />
-          <Milestone label="Owner / admin invitation" done={Boolean(order.invitationSentAt)} detail={order.invitationSentAt ? `Sent to ${order.ownerEmail}` : 'Pending'} />
+          <Milestone label="Owner / admin invitation" done={Boolean(order.invitationSentAt)} detail={order.invitationSentAt ? `Sent to ${order.ownerEmail}` : 'Pending — retry available'} />
           <Milestone label="Onboarding started" done={Boolean(order.onboardingStartedAt)} detail={when(order.onboardingStartedAt)} />
           <Milestone label="Fulfillment complete" done={Boolean(order.fulfilledAt)} detail={when(order.fulfilledAt)} />
         </div>
