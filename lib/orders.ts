@@ -145,6 +145,24 @@ export async function getOrderByTurboSignDocumentId(documentId: string): Promise
 export async function getOrderByStripeSessionId(sessionId: string): Promise<InternalOrder | null> { await ensureOrdersTable(); const rows = await prisma.$queryRawUnsafe<Record<string, unknown>[]>(`SELECT * FROM internal_orders WHERE stripe_checkout_session_id = $1 LIMIT 1`, sessionId); return rows[0] ? mapRow(rows[0]) : null; }
 export async function findPendingTurboDocxOrders(): Promise<InternalOrder[]> { await ensureOrdersTable(); const rows = await prisma.$queryRawUnsafe<Record<string, unknown>[]>(`SELECT * FROM internal_orders WHERE source = 'TURBODOCX' AND status = 'PENDING_SIGNATURE' ORDER BY created_at DESC LIMIT 100`); return rows.map(mapRow); }
 
+function normalizeMatchText(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+export async function findPendingTurboDocxOrderByDocumentTitle(title: string): Promise<InternalOrder | null> {
+  const normalizedTitle = normalizeMatchText(title);
+  if (!normalizedTitle) return null;
+
+  const pending = await findPendingTurboDocxOrders();
+  const matches = pending.filter((order) => {
+    const organization = normalizeMatchText(order.organizationName);
+    const quote = order.quoteId ? normalizeMatchText(order.quoteId) : '';
+    return (organization.length > 1 && normalizedTitle.includes(organization)) || (quote.length > 1 && normalizedTitle.includes(quote));
+  });
+
+  return matches.length === 1 ? matches[0] : null;
+}
+
 export async function updateOrder(id: string, changes: Partial<Pick<InternalOrder, 'status' | 'organizationId' | 'signedAt' | 'provisionedAt' | 'notes' | 'stripeSubscriptionId' | 'turboSignDocumentId' | 'entitlementsProvisionedAt' | 'invitationSentAt' | 'onboardingStartedAt' | 'fulfilledAt'>>) {
   await ensureOrdersTable(); const current = await getOrder(id); if (!current) return null;
   const rows = await prisma.$queryRawUnsafe<Record<string, unknown>[]>(`UPDATE internal_orders SET status=$2, organization_id=$3, signed_at=$4, provisioned_at=$5, notes=$6, stripe_subscription_id=$7, turbosign_document_id=$8, entitlements_provisioned_at=$9, invitation_sent_at=$10, onboarding_started_at=$11, fulfilled_at=$12, updated_at=NOW() WHERE id=$1 RETURNING *`, id, changes.status ?? current.status, changes.organizationId ?? current.organizationId, changes.signedAt ?? current.signedAt, changes.provisionedAt ?? current.provisionedAt, changes.notes ?? current.notes, changes.stripeSubscriptionId ?? current.stripeSubscriptionId, changes.turboSignDocumentId ?? current.turboSignDocumentId, changes.entitlementsProvisionedAt ?? current.entitlementsProvisionedAt, changes.invitationSentAt ?? current.invitationSentAt, changes.onboardingStartedAt ?? current.onboardingStartedAt, changes.fulfilledAt ?? current.fulfilledAt);
