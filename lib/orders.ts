@@ -57,16 +57,6 @@ type CreateOrderInput = {
 
 let initialized = false;
 
-/**
- * Orders are an internal, cross-tenant operational object. They exist before
- * a customer organization is provisioned, so they intentionally live outside
- * the tenant-scoped model set. This bootstrap is additive and safe to run on
- * every server instance; PostgreSQL's IF NOT EXISTS makes it idempotent.
- *
- * This keeps Order & Fulfillment v1 deployable without coupling production
- * startup to a manual Prisma migration. A later schema migration can move this
- * table into Prisma without changing the workflow or UI contract.
- */
 export async function ensureOrdersTable() {
   if (initialized) return;
   await prisma.$executeRawUnsafe(`
@@ -202,6 +192,26 @@ export async function getOrderByTurboSignDocumentId(documentId: string): Promise
   return rows[0] ? mapRow(rows[0]) : null;
 }
 
+export async function findPendingTurboDocxOrderByDocumentTitle(title: string): Promise<InternalOrder | null> {
+  await ensureOrdersTable();
+  const normalizedTitle = title.trim().toLowerCase();
+  if (!normalizedTitle) return null;
+  const rows = await prisma.$queryRawUnsafe<Record<string, unknown>[]>(
+    `SELECT * FROM internal_orders
+     WHERE source = 'TURBODOCX'
+       AND status = 'PENDING_SIGNATURE'
+       AND turbosign_document_id IS NULL
+     ORDER BY created_at DESC
+     LIMIT 100`,
+  );
+  const candidates = rows.map(mapRow).filter((order) => {
+    const org = order.organizationName.trim().toLowerCase();
+    const quote = order.quoteId?.trim().toLowerCase();
+    return (org.length >= 2 && normalizedTitle.includes(org)) || (!!quote && normalizedTitle.includes(quote));
+  });
+  return candidates.length === 1 ? candidates[0] : null;
+}
+
 export async function getOrderByStripeSessionId(sessionId: string): Promise<InternalOrder | null> {
   await ensureOrdersTable();
   const rows = await prisma.$queryRawUnsafe<Record<string, unknown>[]>(
@@ -213,7 +223,7 @@ export async function getOrderByStripeSessionId(sessionId: string): Promise<Inte
 
 export async function updateOrder(
   id: string,
-  changes: Partial<Pick<InternalOrder, 'status' | 'organizationId' | 'signedAt' | 'provisionedAt' | 'notes' | 'stripeSubscriptionId'>>,
+  changes: Partial<Pick<InternalOrder, 'status' | 'organizationId' | 'signedAt' | 'provisionedAt' | 'notes' | 'stripeSubscriptionId' | 'turboSignDocumentId'>>,
 ) {
   await ensureOrdersTable();
   const current = await getOrder(id);
@@ -226,6 +236,7 @@ export async function updateOrder(
       provisioned_at = $5,
       notes = $6,
       stripe_subscription_id = $7,
+      turbosign_document_id = $8,
       updated_at = NOW()
      WHERE id = $1 RETURNING *`,
     id,
@@ -235,6 +246,7 @@ export async function updateOrder(
     changes.provisionedAt ?? current.provisionedAt,
     changes.notes ?? current.notes,
     changes.stripeSubscriptionId ?? current.stripeSubscriptionId,
+    changes.turboSignDocumentId ?? current.turboSignDocumentId,
   );
   return rows[0] ? mapRow(rows[0]) : null;
 }
