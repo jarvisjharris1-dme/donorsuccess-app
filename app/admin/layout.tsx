@@ -1,6 +1,6 @@
 import { redirect } from 'next/navigation';
 import Link from 'next/link';
-import { ShieldAlert, LogOut } from 'lucide-react';
+import { ShieldAlert, LogOut, PackageCheck, Building2 } from 'lucide-react';
 import { auth, signOut } from '@/auth';
 
 export default async function AdminLayout({ children }: { children: React.ReactNode }) {
@@ -16,17 +16,27 @@ export default async function AdminLayout({ children }: { children: React.ReactN
     <div className="min-h-screen bg-gray-900">
       <header className="border-b border-gray-800 bg-gray-900">
         <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
-          <Link href="/admin" className="flex items-center gap-2.5 text-white">
-            <ShieldAlert size={20} className="text-warning" />
-            <span className="text-[15px] font-extrabold">
-              Master Admin Console
-              <span className="ml-2 rounded-full bg-warning/20 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-warning">
-                Internal
+          <div className="flex items-center gap-7">
+            <Link href="/admin" className="flex items-center gap-2.5 text-white">
+              <ShieldAlert size={20} className="text-warning" />
+              <span className="text-[15px] font-extrabold">
+                Master Admin Console
+                <span className="ml-2 rounded-full bg-warning/20 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-warning">
+                  Internal
+                </span>
               </span>
-            </span>
-          </Link>
+            </Link>
+            <nav className="hidden items-center gap-4 lg:flex">
+              <Link href="/admin" className="flex items-center gap-1.5 text-[13px] font-semibold text-gray-400 hover:text-white">
+                <Building2 size={14} /> Organizations
+              </Link>
+              <Link href="/admin/orders" className="flex items-center gap-1.5 text-[13px] font-semibold text-gray-400 hover:text-white">
+                <PackageCheck size={14} /> Orders & Fulfillment
+              </Link>
+            </nav>
+          </div>
           <div className="flex items-center gap-5 text-gray-300">
-            <span className="text-[13px]">{session.user.email}</span>
+            <span className="hidden text-[13px] sm:inline">{session.user.email}</span>
             <Link href="/dashboard" className="text-[13px] font-semibold hover:text-white">
               Exit to app
             </Link>

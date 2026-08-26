@@ -9,6 +9,7 @@ import { generateToken } from '@/lib/tokens';
 import { sendEmail } from '@/lib/email/resend';
 import { invitationEmail } from '@/lib/email/templates/invitation';
 import { subscriptionIssueEmail } from '@/lib/email/templates/subscription-issue';
+import { createOrder, getOrderByStripeSessionId, updateOrder } from '@/lib/orders';
 
 export const runtime = 'nodejs';
 const INVITE_EXPIRY_DAYS = 7;
@@ -40,11 +41,12 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
     return;
   }
 
+  const subscriptionId =
+    typeof session.subscription === 'string' ? session.subscription : session.subscription?.id;
+
   // Idempotency — Stripe can and does redeliver webhook events. If an
   // organization already exists for this subscription, this is a
   // redelivery, not a new signup.
-  const subscriptionId =
-    typeof session.subscription === 'string' ? session.subscription : session.subscription?.id;
   if (subscriptionId) {
     const existing = await prisma.organization.findUnique({ where: { stripeSubscriptionId: subscriptionId } });
     if (existing) return;
@@ -59,6 +61,28 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
   const tier = metadata.plan === 'growth' ? SubscriptionTier.GROWTH : SubscriptionTier.STARTER;
   const slug = await uniqueSlug(slugify(metadata.organizationName));
   const customerId = typeof session.customer === 'string' ? session.customer : session.customer?.id;
+
+  // Both buying motions now enter the same operational queue. A unique
+  // Stripe session ID prevents webhook redelivery from creating duplicates.
+  let order = await getOrderByStripeSessionId(session.id);
+  if (!order) {
+    try {
+      order = await createOrder({
+        source: 'STRIPE',
+        status: 'SIGNED',
+        organizationName: metadata.organizationName,
+        ownerName: metadata.ownerName ?? null,
+        ownerEmail: metadata.ownerEmail,
+        subscriptionTier: tier === SubscriptionTier.GROWTH ? 'GROWTH' : 'STARTER',
+        billingPeriod: metadata.period ?? null,
+        stripeCheckoutSessionId: session.id,
+        stripeSubscriptionId: subscriptionId ?? null,
+        products: [`Donor Success ${tier === SubscriptionTier.GROWTH ? 'Growth' : 'Starter'}`],
+      });
+    } catch (err) {
+      console.error('Could not create Stripe fulfillment order:', err);
+    }
+  }
 
   const organization = await prisma.organization.create({
     data: {
@@ -82,15 +106,19 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
   }
 
   // Invitation.invitedById is required — there's no logged-in session
-  // in a webhook to attribute this to, same reasoning as
-  // scripts/grant-platform-admin.ts. Attributed to an existing platform
-  // admin, since they're ultimately responsible for the platform
-  // granting this access.
+  // in a webhook to attribute this to, so use an existing platform admin.
   const platformAdmin = await prisma.user.findFirst({ where: { isPlatformAdmin: true } });
   if (!platformAdmin) {
     console.error(
       'No platform admin exists to attribute this self-serve invitation to — run the seed script or scripts/grant-platform-admin.ts first.',
     );
+    if (order) {
+      await updateOrder(order.id, {
+        status: 'FAILED',
+        organizationId: organization.id,
+        notes: 'Stripe payment succeeded and organization was created, but owner invitation could not be attributed because no platform admin exists.',
+      });
+    }
     return;
   }
 
@@ -118,6 +146,15 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
   } catch (err) {
     console.error('Self-serve signup invitation email failed to send:', err);
   }
+
+  if (order) {
+    await updateOrder(order.id, {
+      status: 'READY_FOR_KICKOFF',
+      organizationId: organization.id,
+      provisionedAt: new Date(),
+      stripeSubscriptionId: subscriptionId ?? null,
+    });
+  }
 }
 
 const HEALTHY_STATUSES = new Set(['active', 'trialing']);
@@ -131,18 +168,16 @@ const AT_RISK_STATUSES = new Set(['past_due', 'canceled', 'unpaid', 'incomplete_
  */
 async function updateSubscriptionStatus(stripeSubscriptionId: string, newStatus: string) {
   const organization = await prisma.organization.findUnique({ where: { stripeSubscriptionId } });
-  if (!organization) return; // not a self-serve org, or genuinely not found — nothing to do
+  if (!organization) return;
 
   const previousStatus = organization.subscriptionStatus;
-  if (previousStatus === newStatus) return; // redelivery of an event we've already processed
+  if (previousStatus === newStatus) return;
 
   await prisma.organization.update({
     where: { id: organization.id },
     data: { subscriptionStatus: newStatus, subscriptionStatusChangedAt: new Date() },
   });
 
-  // Only warn on the *transition into* trouble, not every redelivery or
-  // every subsequent at-risk webhook for the same ongoing issue.
   const enteringTrouble =
     AT_RISK_STATUSES.has(newStatus) && (!previousStatus || HEALTHY_STATUSES.has(previousStatus));
   if (!enteringTrouble) return;
@@ -154,8 +189,6 @@ async function updateSubscriptionStatus(stripeSubscriptionId: string, newStatus:
       manageBillingUrl: `${baseUrl}/settings`,
       reason: newStatus as 'past_due' | 'canceled' | 'unpaid' | 'incomplete_expired',
     });
-    // Sent to every Owner/Admin on the org, not just whoever originally
-    // signed up — billing trouble should reach everyone who can act on it.
     const recipients = await prisma.user.findMany({
       where: { organizationId: organization.id, role: { in: [Role.OWNER, Role.ADMIN] }, isActive: true },
       select: { email: true },
@@ -208,13 +241,10 @@ export async function POST(req: NextRequest) {
         await handleSubscriptionDeleted(event.data.object as Stripe.Subscription);
         break;
       default:
-        break; // other event types are intentionally ignored
+        break;
     }
   } catch (err) {
     console.error(`Stripe webhook handler error (${event.type}):`, err);
-    // Still 200 — a 4xx/5xx here makes Stripe retry indefinitely, and a
-    // bug in our handling shouldn't hold Stripe's delivery queue hostage.
-    // The error is logged either way for investigation.
   }
 
   return NextResponse.json({ received: true });
