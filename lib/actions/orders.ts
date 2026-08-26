@@ -23,7 +23,7 @@ const newOrderSchema = z.object({
   arr: z.coerce.number().min(0).optional(),
   oneTime: z.coerce.number().min(0).optional(),
   quoteId: z.string().trim().optional(),
-  turboSignDocumentId: z.string().trim().min(3, 'TurboSign document ID is required'),
+  turboSignDocumentId: z.string().trim().optional(),
   products: z.string().trim().optional(),
   notes: z.string().trim().optional(),
 });
@@ -44,7 +44,7 @@ export async function createSalesAssistedOrderAction(
     arr: formData.get('arr') || undefined,
     oneTime: formData.get('oneTime') || undefined,
     quoteId: formData.get('quoteId') || undefined,
-    turboSignDocumentId: formData.get('turboSignDocumentId'),
+    turboSignDocumentId: formData.get('turboSignDocumentId') || undefined,
     products: formData.get('products') || undefined,
     notes: formData.get('notes') || undefined,
   });
@@ -63,14 +63,19 @@ export async function createSalesAssistedOrderAction(
       arrCents: parsed.data.arr == null ? null : Math.round(parsed.data.arr * 100),
       oneTimeCents: parsed.data.oneTime == null ? null : Math.round(parsed.data.oneTime * 100),
       quoteId: parsed.data.quoteId || null,
-      turboSignDocumentId: parsed.data.turboSignDocumentId,
+      turboSignDocumentId: parsed.data.turboSignDocumentId || null,
       products: parsed.data.products
         ? parsed.data.products.split(',').map((p) => p.trim()).filter(Boolean)
         : [],
       notes: parsed.data.notes || null,
     });
     revalidatePath('/admin/orders');
-    return { success: 'Order created and linked to TurboSign.', orderId: order.id };
+    return {
+      success: parsed.data.turboSignDocumentId
+        ? 'Order created and linked to TurboSign.'
+        : 'Order created. TurboSign will auto-link it when the signature event arrives.',
+      orderId: order.id,
+    };
   } catch (err) {
     console.error('Create sales-assisted order failed:', err);
     const message = err instanceof Error && err.message.includes('unique')
