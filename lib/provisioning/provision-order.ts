@@ -10,11 +10,7 @@ import { type InternalOrder, updateOrder } from '@/lib/orders';
 const INVITE_EXPIRY_DAYS = 7;
 
 function slugify(name: string): string {
-  return name
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/(^-|-$)/g, '');
+  return name.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
 }
 
 async function uniqueSlug(base: string): Promise<string> {
@@ -30,34 +26,20 @@ async function uniqueSlug(base: string): Promise<string> {
 
 function tierFor(order: InternalOrder): SubscriptionTier {
   switch (order.subscriptionTier) {
-    case 'STARTER':
-      return SubscriptionTier.STARTER;
-    case 'GROWTH':
-      return SubscriptionTier.GROWTH;
-    default:
-      return SubscriptionTier.ENTERPRISE;
+    case 'STARTER': return SubscriptionTier.STARTER;
+    case 'GROWTH': return SubscriptionTier.GROWTH;
+    default: return SubscriptionTier.ENTERPRISE;
   }
 }
 
-/**
- * Common provisioning engine for signed sales-assisted orders. Stripe uses
- * the same organization/invite primitives today; Order v1 deliberately keeps
- * this service small so Stripe can be moved onto it without changing customer
- * behavior.
- */
 export async function provisionOrder(order: InternalOrder) {
-  if (order.organizationId) {
-    return prisma.organization.findUnique({ where: { id: order.organizationId } });
-  }
+  if (order.organizationId) return prisma.organization.findUnique({ where: { id: order.organizationId } });
 
   await updateOrder(order.id, { status: 'PROVISIONING' });
 
   const existingUser = await prisma.user.findUnique({ where: { email: order.ownerEmail.toLowerCase() } });
   if (existingUser) {
-    await updateOrder(order.id, {
-      status: 'FAILED',
-      notes: `Provisioning blocked: ${order.ownerEmail} already belongs to an existing Donor Success account.`,
-    });
+    await updateOrder(order.id, { status: 'FAILED', notes: `Provisioning blocked: ${order.ownerEmail} already belongs to an existing Donor Success account.` });
     throw new Error('Owner email already belongs to an existing account.');
   }
 
@@ -78,6 +60,11 @@ export async function provisionOrder(order: InternalOrder) {
   } catch (err) {
     console.error('Starter content creation failed during order provisioning:', err);
   }
+
+  await updateOrder(order.id, {
+    organizationId: organization.id,
+    entitlementsProvisionedAt: new Date(),
+  });
 
   const platformAdmin = await prisma.user.findFirst({ where: { isPlatformAdmin: true } });
   if (!platformAdmin) {
@@ -101,6 +88,7 @@ export async function provisionOrder(order: InternalOrder) {
     },
   });
 
+  let invitationSentAt: Date | null = null;
   try {
     const baseUrl = process.env.NEXTAUTH_URL || 'http://localhost:3000';
     const { subject, html, text } = invitationEmail({
@@ -110,6 +98,7 @@ export async function provisionOrder(order: InternalOrder) {
       recipientName: order.ownerName ?? undefined,
     });
     await sendEmail({ to: order.ownerEmail, subject, html, text });
+    invitationSentAt = new Date();
   } catch (err) {
     console.error('Order provisioning invitation email failed:', err);
   }
@@ -118,6 +107,7 @@ export async function provisionOrder(order: InternalOrder) {
     status: 'READY_FOR_KICKOFF',
     organizationId: organization.id,
     provisionedAt: new Date(),
+    invitationSentAt,
   });
 
   return organization;
