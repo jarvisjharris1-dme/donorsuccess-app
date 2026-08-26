@@ -32,7 +32,7 @@ export default function CreateOrderForm() {
     <form onSubmit={submit} className="rounded-2xl border border-gray-800 bg-gray-800/40 p-6">
       <div className="mb-5">
         <h2 className="text-[16px] font-bold text-white">Create sales-assisted order</h2>
-        <p className="mt-1 text-sm text-gray-400">Link the commercial details to the TurboSign document before it is completed.</p>
+        <p className="mt-1 text-sm text-gray-400">Create the fulfillment record before signature completion. TurboSign will auto-link the hidden document ID when the webhook arrives.</p>
       </div>
 
       <div className="grid gap-4 md:grid-cols-2">
@@ -42,11 +42,11 @@ export default function CreateOrderForm() {
         </div>
         <div>
           <label className={label}>Owner / primary contact</label>
-          <input className={input} name="ownerName" placeholder="Alex Morgan" />
+          <input className={input} name="ownerName" placeholder="Aspen Wooten" />
         </div>
         <div>
           <label className={label}>Owner email</label>
-          <input className={input} name="ownerEmail" type="email" required placeholder="alex@example.org" />
+          <input className={input} name="ownerEmail" type="email" required placeholder="aspen@example.org" />
         </div>
         <div>
           <label className={label}>Plan</label>
@@ -74,13 +74,14 @@ export default function CreateOrderForm() {
           <label className={label}>TurboQuote ID</label>
           <input className={input} name="quoteId" placeholder="Q-2026-00002" />
         </div>
-        <div className="md:col-span-2">
-          <label className={label}>TurboSign document ID</label>
-          <input className={input} name="turboSignDocumentId" required placeholder="2dea093d-c38f-4898-b440-43dd9a14cd9d" />
+        <div>
+          <label className={label}>TurboSign document ID <span className="font-normal text-gray-500">(optional)</span></label>
+          <input className={input} name="turboSignDocumentId" placeholder="Auto-linked from TurboSign" />
+          <p className="mt-1 text-xs text-gray-500">Leave blank for normal use. The webhook will match the signed document to this order by organization name or quote ID, then save the document ID automatically.</p>
         </div>
         <div className="md:col-span-2">
           <label className={label}>Products / modules</label>
-          <input className={input} name="products" placeholder="Donor Success Growth, Grants Management" />
+          <input className={input} name="products" placeholder="Donor Success Professional, Grants Management" />
           <p className="mt-1 text-xs text-gray-500">Separate multiple products with commas.</p>
         </div>
         <div className="md:col-span-2">
