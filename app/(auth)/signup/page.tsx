@@ -8,11 +8,7 @@ import { createCheckoutSessionAction } from '@/lib/actions/signup';
 import SubmitButton from '@/components/SubmitButton';
 import BrandPanel from '@/components/auth/BrandPanel';
 
-const PLAN_LABELS: Record<string, string> = { starter: 'Starter', growth: 'Growth' };
-const PLAN_PRICES: Record<string, { monthly: number; annual: number }> = {
-  starter: { monthly: 99, annual: 89 },
-  growth: { monthly: 249, annual: 219 },
-};
+const PLAN_PRICES = { monthly: 99, annual: 89 };
 
 export default function SignupPage() {
   return (
@@ -24,28 +20,25 @@ export default function SignupPage() {
 
 function SignupForm() {
   const searchParams = useSearchParams();
-  const initialPlan = searchParams.get('plan') === 'growth' ? 'growth' : 'starter';
   const initialPeriod = searchParams.get('period') === 'monthly' ? 'monthly' : 'annual';
 
-  const [plan, setPlan] = useState(initialPlan);
-  const [period, setPeriod] = useState(initialPeriod);
+  const [period, setPeriod] = useState<'monthly' | 'annual'>(initialPeriod);
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
   function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
-    formData.set('plan', plan);
+    formData.set('plan', 'starter');
     formData.set('period', period);
     setError(null);
     startTransition(async () => {
       const result = await createCheckoutSessionAction(undefined, formData);
       if (result?.error) setError(result.error);
-      // On success this redirects to Stripe and never returns here.
     });
   }
 
-  const price = PLAN_PRICES[plan][period as 'monthly' | 'annual'];
+  const price = PLAN_PRICES[period];
 
   return (
     <div className="flex min-h-screen">
@@ -53,27 +46,22 @@ function SignupForm() {
 
       <div className="flex flex-1 items-center justify-center bg-gray-50 px-5 py-12 lg:bg-white">
         <div className="w-full max-w-[440px] fade-up">
-          <h1 className="text-[28px] font-extrabold text-gray-900">Start your subscription</h1>
+          <h1 className="text-[28px] font-extrabold text-gray-900">Start with Donor Success</h1>
           <p className="mt-1.5 text-[15px] text-gray-600">
-            You&rsquo;ll set your password after payment — we&rsquo;ll email you a link.
+            Starter is available for secure online purchase. Growth and Enterprise are tailored with our team.
           </p>
 
-          <div className="mt-6 flex gap-2">
-            {(['starter', 'growth'] as const).map((p) => (
-              <button
-                key={p}
-                type="button"
-                onClick={() => setPlan(p)}
-                className={`flex-1 rounded-xl border px-4 py-3 text-left transition-colors ${
-                  plan === p ? 'border-evergreen bg-evergreen/5' : 'border-gray-200'
-                }`}
-              >
-                <div className="text-[13.5px] font-semibold text-gray-900">{PLAN_LABELS[p]}</div>
-                <div className="text-xs text-gray-600">
-                  ${PLAN_PRICES[p][period as 'monthly' | 'annual']}/mo
-                </div>
-              </button>
-            ))}
+          <div className="mt-6 rounded-xl border border-evergreen bg-evergreen/5 px-4 py-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-[14px] font-bold text-gray-900">Starter</div>
+                <div className="mt-1 text-xs text-gray-600">Self-service purchase and onboarding</div>
+              </div>
+              <div className="text-right">
+                <div className="text-lg font-extrabold text-evergreen">${price}/mo</div>
+                {period === 'annual' && <div className="text-[11px] text-gray-500">billed annually</div>}
+              </div>
+            </div>
           </div>
 
           <div className="mt-3 inline-flex rounded-full border border-gray-200 p-1">
@@ -120,18 +108,22 @@ function SignupForm() {
             </p>
           </form>
 
-          <p className="mt-7 text-center text-sm text-gray-600">
-            Need Enterprise, or already have an account?{' '}
+          <div className="mt-7 rounded-xl bg-gray-50 p-4 text-center">
+            <p className="text-sm font-semibold text-gray-800">Need Growth or Enterprise?</p>
+            <p className="mt-1 text-xs text-gray-500">We&rsquo;ll tailor the solution, quote, onboarding, and implementation with you.</p>
+            <a
+              href="https://www.donorsuccess.com/contact?plan=growth"
+              className="mt-2 inline-block text-sm font-bold text-evergreen hover:text-[#0d685f]"
+            >
+              Build my plan →
+            </a>
+          </div>
+
+          <p className="mt-6 text-center text-sm text-gray-600">
+            Already have an account?{' '}
             <Link href="/login" className="font-semibold text-evergreen hover:text-[#0d685f]">
               Log in
             </Link>
-            {' · '}
-            <a
-              href="https://www.donorsuccess.com/contact?plan=enterprise"
-              className="font-semibold text-evergreen hover:text-[#0d685f]"
-            >
-              Talk to sales
-            </a>
           </p>
         </div>
       </div>
