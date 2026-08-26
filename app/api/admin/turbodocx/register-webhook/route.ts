@@ -21,14 +21,15 @@ export async function POST(req: NextRequest) {
   const webhookUrl = `${origin}/api/webhooks/turbodocx`;
 
   try {
-    const response = await fetch(`${TURBODOCX_API_BASE}/webhooks`, {
+    const response = await fetch(`${TURBODOCX_API_BASE}/api/webhooks`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${apiKey}`,
-        'X-Organization-Id': orgId,
+        'x-rapiddocx-org-id': orgId,
       },
       body: JSON.stringify({
+        name: 'signature',
         urls: [webhookUrl],
         events: ['signature.document.completed', 'signature.document.voided'],
       }),
@@ -38,13 +39,17 @@ export async function POST(req: NextRequest) {
     const body = await response.json().catch(() => ({}));
     if (!response.ok) {
       console.error('TurboDocx webhook registration failed', response.status, body);
-      return NextResponse.json({ error: body?.message || body?.error || `TurboDocx returned ${response.status}` }, { status: response.status });
+      return NextResponse.json(
+        { error: body?.message || body?.error || `TurboDocx returned ${response.status}` },
+        { status: response.status },
+      );
     }
 
+    const data = body?.data ?? body;
     return NextResponse.json({
       success: true,
-      webhookId: body.id,
-      secret: body.secret,
+      webhookId: data?.id,
+      secret: data?.secret,
       webhookUrl,
       warning: 'Copy the secret now. TurboDocx only returns it once.',
     });
