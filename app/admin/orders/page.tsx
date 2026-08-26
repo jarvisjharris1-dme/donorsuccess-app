@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { listOrders } from '@/lib/orders';
 import CreateOrderForm from '@/components/admin/CreateOrderForm';
+import TurboDocxWebhookSetup from '@/components/admin/TurboDocxWebhookSetup';
 
 function money(cents: number | null) {
   if (cents == null) return '—';
@@ -25,10 +26,12 @@ export default async function OrdersPage() {
         <div>
           <p className="text-xs font-bold uppercase tracking-[0.18em] text-warning">Internal Operations</p>
           <h1 className="mt-2 text-3xl font-extrabold text-white">Orders & Fulfillment</h1>
-          <p className="mt-2 max-w-2xl text-sm text-gray-400">One operational queue for sales-assisted TurboSign orders and, next, Stripe self-service purchases.</p>
+          <p className="mt-2 max-w-2xl text-sm text-gray-400">One operational queue for sales-assisted TurboSign orders and Stripe self-service purchases.</p>
         </div>
         <Link href="/admin" className="text-sm font-semibold text-gray-300 hover:text-white">← Admin home</Link>
       </div>
+
+      <TurboDocxWebhookSetup />
 
       <div className="grid gap-4 sm:grid-cols-3">
         <div className="rounded-2xl border border-gray-800 bg-gray-800/40 p-5"><div className="text-xs font-bold uppercase tracking-wide text-gray-500">Total Orders</div><div className="mt-2 text-3xl font-extrabold text-white">{orders.length}</div></div>
