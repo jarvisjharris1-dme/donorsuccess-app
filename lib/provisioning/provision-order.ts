@@ -32,8 +32,78 @@ function tierFor(order: InternalOrder): SubscriptionTier {
   }
 }
 
+export async function sendOrderOwnerInvitation(order: InternalOrder) {
+  if (!order.organizationId) throw new Error('Organization must exist before sending the owner invitation.');
+
+  const organization = await prisma.organization.findUnique({ where: { id: order.organizationId } });
+  if (!organization) throw new Error('Provisioned organization could not be found.');
+
+  const existingUser = await prisma.user.findUnique({ where: { email: order.ownerEmail.toLowerCase() } });
+  if (existingUser) {
+    await updateOrder(order.id, { invitationSentAt: order.invitationSentAt ?? new Date() });
+    return { alreadyActive: true };
+  }
+
+  const platformAdmin = await prisma.user.findFirst({ where: { isPlatformAdmin: true } });
+  if (!platformAdmin) throw new Error('No platform admin exists to attribute the invitation to.');
+
+  const email = order.ownerEmail.toLowerCase();
+  let invitation = await prisma.invitation.findUnique({
+    where: { organizationId_email: { organizationId: organization.id, email } },
+  });
+
+  if (invitation?.acceptedAt) {
+    await updateOrder(order.id, { invitationSentAt: order.invitationSentAt ?? invitation.createdAt });
+    return { alreadyAccepted: true };
+  }
+
+  const token = generateToken();
+  const expiresAt = new Date(Date.now() + INVITE_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
+  if (invitation) {
+    invitation = await prisma.invitation.update({
+      where: { id: invitation.id },
+      data: { token, expiresAt, role: Role.OWNER, invitedById: platformAdmin.id },
+    });
+  } else {
+    invitation = await prisma.invitation.create({
+      data: {
+        organizationId: organization.id,
+        email,
+        role: Role.OWNER,
+        token,
+        expiresAt,
+        invitedById: platformAdmin.id,
+      },
+    });
+  }
+
+  const baseUrl = process.env.NEXTAUTH_URL || 'http://localhost:3000';
+  const { subject, html, text } = invitationEmail({
+    acceptUrl: `${baseUrl}/accept-invite/${invitation.token}`,
+    organizationName: organization.name,
+    inviterName: 'Donor Success',
+    recipientName: order.ownerName ?? undefined,
+  });
+
+  try {
+    await sendEmail({ to: order.ownerEmail, subject, html, text });
+    const sentAt = new Date();
+    await updateOrder(order.id, { invitationSentAt: sentAt });
+    return { sentAt };
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : 'Unknown email delivery error';
+    await updateOrder(order.id, {
+      notes: `${order.notes ? `${order.notes}\n\n` : ''}Owner invitation email failed: ${reason}`,
+    });
+    throw err;
+  }
+}
+
 export async function provisionOrder(order: InternalOrder) {
-  if (order.organizationId) return prisma.organization.findUnique({ where: { id: order.organizationId } });
+  if (order.organizationId) {
+    if (!order.invitationSentAt) await sendOrderOwnerInvitation(order);
+    return prisma.organization.findUnique({ where: { id: order.organizationId } });
+  }
 
   await updateOrder(order.id, { status: 'PROVISIONING' });
 
@@ -66,39 +136,9 @@ export async function provisionOrder(order: InternalOrder) {
     entitlementsProvisionedAt: new Date(),
   });
 
-  const platformAdmin = await prisma.user.findFirst({ where: { isPlatformAdmin: true } });
-  if (!platformAdmin) {
-    await updateOrder(order.id, {
-      status: 'FAILED',
-      organizationId: organization.id,
-      notes: 'Organization created, but no platform admin exists to attribute the owner invitation to.',
-    });
-    throw new Error('No platform admin exists to attribute the invitation to.');
-  }
-
-  const token = generateToken();
-  await prisma.invitation.create({
-    data: {
-      organizationId: organization.id,
-      email: order.ownerEmail.toLowerCase(),
-      role: Role.OWNER,
-      token,
-      expiresAt: new Date(Date.now() + INVITE_EXPIRY_DAYS * 24 * 60 * 60 * 1000),
-      invitedById: platformAdmin.id,
-    },
-  });
-
-  let invitationSentAt: Date | null = null;
+  const refreshed = { ...order, organizationId: organization.id } as InternalOrder;
   try {
-    const baseUrl = process.env.NEXTAUTH_URL || 'http://localhost:3000';
-    const { subject, html, text } = invitationEmail({
-      acceptUrl: `${baseUrl}/accept-invite/${token}`,
-      organizationName: organization.name,
-      inviterName: 'Donor Success',
-      recipientName: order.ownerName ?? undefined,
-    });
-    await sendEmail({ to: order.ownerEmail, subject, html, text });
-    invitationSentAt = new Date();
+    await sendOrderOwnerInvitation(refreshed);
   } catch (err) {
     console.error('Order provisioning invitation email failed:', err);
   }
@@ -107,7 +147,6 @@ export async function provisionOrder(order: InternalOrder) {
     status: 'READY_FOR_KICKOFF',
     organizationId: organization.id,
     provisionedAt: new Date(),
-    invitationSentAt,
   });
 
   return organization;
