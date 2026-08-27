@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { ExternalLink } from 'lucide-react';
+import { ExternalLink, Palette } from 'lucide-react';
 import { auth } from '@/auth';
 import { forOrg } from '@/lib/tenant-db';
 import { hasGrantCapability } from '@/lib/grant-permissions';
@@ -28,10 +28,10 @@ export default async function FundingRoundDetailPage({ params }: { params: { id:
     <div className="max-w-5xl">
       <div className="flex items-start justify-between gap-4">
         <div><div className="flex items-center gap-3"><h1 className="text-2xl font-extrabold text-gray-900">{round.name}</h1><span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${FUNDING_ROUND_STATUS_STYLES[round.status]}`}>{FUNDING_ROUND_STATUS_LABELS[round.status]}</span></div>{round.description && <p className="mt-1 text-sm text-gray-600">{round.description}</p>}{round.closesAt && <p className="mt-1 text-[13px] text-gray-500">Closes {formatDate(round.closesAt)}</p>}</div>
-        <div className="flex items-center gap-2"><Link href={`/apply/${round.id}`} target="_blank" className="flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-sm font-semibold text-gray-700 hover:border-gray-300 hover:bg-gray-50"><ExternalLink size={15} /> Public application</Link>{canManage && <RoundStatusControl roundId={round.id} status={round.status} />}</div>
+        <div className="flex flex-wrap items-center justify-end gap-2"><Link href="/settings/community-portal" className="flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-sm font-semibold text-gray-700 hover:border-gray-300 hover:bg-gray-50"><Palette size={15} /> Portal branding</Link><Link href={`/apply/${round.id}`} target="_blank" className="flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-sm font-semibold text-gray-700 hover:border-gray-300 hover:bg-gray-50"><ExternalLink size={15} /> Public application</Link>{canManage && <RoundStatusControl roundId={round.id} status={round.status} />}</div>
       </div>
 
-      <div className="mt-6 rounded-[14px] border border-[#bfe4df] bg-[#eff9f7] p-4"><p className="text-sm font-bold text-[#0f6f66]">Community Portal is ready</p><p className="mt-1 text-sm text-gray-600">Share the public application link with agencies when this round is Open. Public submissions automatically create or match the grantee and appear in the application queue.</p><code className="mt-2 block break-all rounded-lg bg-white/80 px-3 py-2 text-xs text-gray-600">/apply/{round.id}</code></div>
+      <div className="mt-6 rounded-[14px] border border-[#bfe4df] bg-[#eff9f7] p-4"><div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div><p className="text-sm font-bold text-[#0f6f66]">Community Portal is ready</p><p className="mt-1 text-sm text-gray-600">Share the public application link with agencies when this round is Open. Public submissions automatically create or match the grantee and appear in the application queue.</p></div><Link href="/settings/community-portal" className="shrink-0 text-sm font-bold text-[#0f6f66] hover:underline">Add organization logo →</Link></div><code className="mt-2 block break-all rounded-lg bg-white/80 px-3 py-2 text-xs text-gray-600">/apply/{round.id}</code></div>
 
       <div className="mt-6 grid grid-cols-4 gap-3">
         <div className="rounded-[12px] bg-gray-50 p-4"><p className="text-[13px] text-gray-600">Funding pool</p><p className="mt-1 text-xl font-semibold text-gray-900">{formatCurrency(round.totalPool.toString())}</p></div>
