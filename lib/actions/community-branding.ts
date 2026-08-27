@@ -24,34 +24,48 @@ export async function uploadCommunityLogoAction(
   if (!(file instanceof File) || file.size === 0) return { error: 'Choose a logo file to upload.' };
   if (!file.type.startsWith('image/')) return { error: 'Logo must be an image file.' };
   if (file.size > 5 * 1024 * 1024) return { error: 'Logo must be 5 MB or smaller.' };
-  if (!process.env.BLOB_READ_WRITE_TOKEN) return { error: 'File storage is not configured for this environment.' };
 
   const orgId = session.user.organizationId;
   const previous = await getCommunityBranding(orgId);
   const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '-');
-  const blob = await put(`community-logos/${orgId}/${Date.now()}-${safeName}`, file, {
-    access: 'public',
-    addRandomSuffix: false,
-  });
 
-  await prisma.$executeRawUnsafe(
-    `UPDATE "organizations"
-     SET "communityLogoUrl" = $2, "communityLogoPathname" = $3, "updatedAt" = CURRENT_TIMESTAMP
-     WHERE "id" = $1`,
-    orgId,
-    blob.url,
-    blob.pathname,
-  );
+  try {
+    // The project's existing Vercel Blob store is private. On Vercel, the
+    // connected store is authenticated with the deployment's store/OIDC
+    // credentials, so a legacy BLOB_READ_WRITE_TOKEN is not required.
+    const blob = await put(`community-logos/${orgId}/${Date.now()}-${safeName}`, file, {
+      access: 'private',
+      addRandomSuffix: false,
+    });
 
-  if (previous?.logoPathname && previous.logoPathname !== blob.pathname) {
-    try { await del(previous.logoPathname); } catch (error) {
-      console.warn('[Community Portal] Previous logo cleanup failed', error);
+    // Private blob URLs cannot be rendered directly in a browser. Persist a
+    // same-origin delivery route while retaining the private pathname for the
+    // authenticated server-side Blob get() call.
+    const deliveryUrl = `/api/community-logo/${orgId}`;
+    await prisma.$executeRawUnsafe(
+      `UPDATE "organizations"
+       SET "communityLogoUrl" = $2, "communityLogoPathname" = $3, "updatedAt" = CURRENT_TIMESTAMP
+       WHERE "id" = $1`,
+      orgId,
+      deliveryUrl,
+      blob.pathname,
+    );
+
+    if (previous?.logoPathname && previous.logoPathname !== blob.pathname) {
+      try { await del(previous.logoPathname); } catch (error) {
+        console.warn('[Community Portal] Previous logo cleanup failed', error);
+      }
     }
+  } catch (error) {
+    console.error('[Community Portal] Logo upload failed', error);
+    return { error: 'Logo upload failed. Please try again.' };
   }
 
+  revalidatePath('/settings');
   revalidatePath('/settings/community-portal');
   revalidatePath('/funding-rounds');
-  return { success: 'Community Portal logo updated.' };
+  revalidatePath('/apply', 'layout');
+  return { success: 'Organization logo updated.' };
 }
 
 export async function removeCommunityLogoAction(): Promise<void> {
@@ -72,5 +86,7 @@ export async function removeCommunityLogoAction(): Promise<void> {
       console.warn('[Community Portal] Logo cleanup failed', error);
     }
   }
+  revalidatePath('/settings');
   revalidatePath('/settings/community-portal');
+  revalidatePath('/apply', 'layout');
 }
