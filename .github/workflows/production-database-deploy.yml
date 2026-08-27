@@ -28,7 +28,7 @@ jobs:
           exit 1
 
   deploy:
-    name: Apply additive Grants schema to production
+    name: Apply additive production schema
     needs: validate
     runs-on: ubuntu-latest
     environment: production
@@ -70,14 +70,17 @@ jobs:
 
       - name: Explain deployment mode
         run: |
-          echo "Using a targeted additive SQL deployment."
+          echo "Using targeted additive SQL deployments."
           echo "This workflow will NOT run prisma db push and will NOT drop unmanaged production tables."
           echo "Protected existing tables include internal_orders and internal_customer_lifecycle."
 
       - name: Apply Grants and Allocations schema
         run: npx prisma db execute --file scripts/production/grants-allocations-additive.sql --url "$DIRECT_URL"
 
-      - name: Verify Grants tables with Prisma Client
+      - name: Apply Community Portal Phase 2 schema
+        run: npx prisma db execute --file scripts/production/community-portal-phase2-additive.sql --url "$DIRECT_URL"
+
+      - name: Verify additive production schema
         run: |
           node <<'NODE'
           const { PrismaClient } = require('@prisma/client');
@@ -91,7 +94,27 @@ jobs:
               prisma.evaluation.count(),
               prisma.allocation.count(),
             ]);
+            const portalTables = await prisma.$queryRawUnsafe(`
+              SELECT table_name
+              FROM information_schema.tables
+              WHERE table_schema = 'public'
+                AND table_name IN ('community_applicants','community_magic_links','community_sessions','community_application_documents')
+              ORDER BY table_name
+            `);
+            const logoColumns = await prisma.$queryRawUnsafe(`
+              SELECT column_name
+              FROM information_schema.columns
+              WHERE table_schema = 'public'
+                AND table_name = 'organizations'
+                AND column_name IN ('communityLogoUrl','communityLogoPathname')
+              ORDER BY column_name
+            `);
             console.log('Grants schema verified:', { rounds, grantees, applications, requests, evaluations, allocations });
+            console.log('Community Portal tables:', portalTables);
+            console.log('Community Portal branding columns:', logoColumns);
+            if (portalTables.length !== 4 || logoColumns.length !== 2) {
+              throw new Error('Community Portal Phase 2 schema verification failed.');
+            }
           })().catch((error) => {
             console.error(error);
             process.exit(1);
@@ -108,7 +131,9 @@ jobs:
           echo "- Commit: $GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
           echo "- Prisma schema validated" >> "$GITHUB_STEP_SUMMARY"
           echo "- Grants & Allocations schema applied additively" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Community Portal Phase 2 schema applied additively" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Funding organization branding columns verified" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Applicant identity, magic-link, session, and document tables verified" >> "$GITHUB_STEP_SUMMARY"
           echo "- Existing unmanaged production tables preserved" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Prisma Client verified all six Grants/Allocations tables" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "This targeted workflow is temporary until the production database is baselined for Prisma Migrate." >> "$GITHUB_STEP_SUMMARY"
