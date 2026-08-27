@@ -24,6 +24,7 @@ export const navItems: NavItem[] = [
   { label: 'Pipeline', href: '/pipeline', icon: GitBranch },
   { label: 'Grants', href: '/grants', icon: HandCoins },
   { label: 'Allocations', href: '/funding-rounds', icon: Building2 },
+  { label: 'Grantees', href: '/grantees', icon: Users },
   { label: 'Success Plans', href: '/plans', icon: Target },
   { label: 'Campaigns', href: '/campaigns', icon: Megaphone },
   { label: 'Board', href: '/board', icon: Landmark },
