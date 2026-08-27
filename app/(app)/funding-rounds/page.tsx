@@ -21,6 +21,7 @@ export default async function FundingRoundsPage() {
     session!.user.role as Role,
     (session!.user.grantRole ?? null) as GrantRole | null,
     'MANAGE_FUNDING_ROUNDS',
+    Boolean(session!.user.isPlatformAdmin),
   );
 
   let rounds;
