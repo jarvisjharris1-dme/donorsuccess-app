@@ -8,7 +8,12 @@ export default async function NewFundingRoundPage() {
   const session = await auth();
   if (!session) redirect('/login');
   if (
-    !hasGrantCapability(session.user.role as Role, session.user.grantRole as GrantRole | null, 'MANAGE_FUNDING_ROUNDS')
+    !hasGrantCapability(
+      session.user.role as Role,
+      session.user.grantRole as GrantRole | null,
+      'MANAGE_FUNDING_ROUNDS',
+      Boolean(session.user.isPlatformAdmin),
+    )
   ) {
     redirect('/funding-rounds');
   }
