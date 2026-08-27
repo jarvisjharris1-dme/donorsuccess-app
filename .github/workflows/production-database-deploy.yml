@@ -34,6 +34,7 @@ jobs:
     environment: production
     env:
       DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+      DIRECT_URL: ${{ secrets.PRODUCTION_DIRECT_URL || secrets.PRODUCTION_DATABASE_URL }}
     steps:
       - name: Checkout main
         uses: actions/checkout@v4
@@ -46,13 +47,17 @@ jobs:
           node-version: 24
           cache: npm
 
-      - name: Verify production database secret
+      - name: Verify production database secrets
         run: |
           if [ -z "$DATABASE_URL" ]; then
             echo "PRODUCTION_DATABASE_URL is not configured."
             exit 1
           fi
-          echo "Production database secret is configured."
+          if [ -z "$DIRECT_URL" ]; then
+            echo "DIRECT_URL could not be resolved."
+            exit 1
+          fi
+          echo "Production database connection variables are configured."
 
       - name: Install dependencies
         run: npm install --no-audit --no-fund
