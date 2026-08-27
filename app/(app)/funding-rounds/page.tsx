@@ -1,25 +1,49 @@
 import Link from 'next/link';
-import { Plus } from 'lucide-react';
+import { Plus, AlertTriangle } from 'lucide-react';
 import { auth } from '@/auth';
 import { forOrg } from '@/lib/tenant-db';
 import { hasGrantCapability } from '@/lib/grant-permissions';
-import { Role, GrantRole } from '@prisma/client';
+import { Role, GrantRole, Prisma } from '@prisma/client';
 import { FUNDING_ROUND_STATUS_LABELS, FUNDING_ROUND_STATUS_STYLES } from '@/lib/allocations';
 import { formatCurrency, formatDate } from '@/lib/format';
 
 export default async function FundingRoundsPage() {
   const session = await auth();
-  const db = forOrg(session!.user.organizationId);
+  const organizationId = session?.user?.organizationId;
+
+  if (!organizationId) {
+    console.error('[Allocations] Missing organizationId in authenticated session');
+    return <AllocationsError message="Your account is missing an organization assignment. Please sign out and back in, then try again." />;
+  }
+
+  const db = forOrg(organizationId);
   const canCreate = hasGrantCapability(
     session!.user.role as Role,
-    session!.user.grantRole as GrantRole | null,
+    (session!.user.grantRole ?? null) as GrantRole | null,
     'MANAGE_FUNDING_ROUNDS',
   );
 
-  const rounds = await db.fundingRound.findMany({
-    orderBy: { createdAt: 'desc' },
-    include: { granteeApplications: { select: { id: true } } },
-  });
+  let rounds;
+  try {
+    rounds = await db.fundingRound.findMany({
+      orderBy: { createdAt: 'desc' },
+      include: { granteeApplications: { select: { id: true } } },
+    });
+  } catch (error) {
+    const prismaError = error instanceof Prisma.PrismaClientKnownRequestError ? error : null;
+    console.error('[Allocations] Funding-round query failed', {
+      code: prismaError?.code ?? 'UNKNOWN',
+      meta: prismaError?.meta ?? null,
+      organizationId,
+      message: error instanceof Error ? error.message : String(error),
+    });
+
+    if (prismaError?.code === 'P2021') {
+      return <AllocationsError message="The Allocations database tables are not available to this production app yet. The application and database deployment appear to be pointed at different databases or schemas." />;
+    }
+
+    return <AllocationsError message="Allocations could not load. The failure has been logged with server-side diagnostics so it can be corrected without exposing database details." />;
+  }
 
   return (
     <div className="max-w-4xl">
@@ -71,6 +95,21 @@ export default async function FundingRoundsPage() {
             </p>
           </Link>
         ))}
+      </div>
+    </div>
+  );
+}
+
+function AllocationsError({ message }: { message: string }) {
+  return (
+    <div className="max-w-3xl rounded-2xl border border-amber-200 bg-amber-50 p-6">
+      <div className="flex items-start gap-3">
+        <AlertTriangle className="mt-0.5 shrink-0 text-amber-600" size={20} />
+        <div>
+          <h1 className="text-lg font-extrabold text-gray-900">Allocations needs attention</h1>
+          <p className="mt-2 text-sm leading-6 text-gray-700">{message}</p>
+          <p className="mt-3 text-xs text-gray-500">No data was changed by this error.</p>
+        </div>
       </div>
     </div>
   );
