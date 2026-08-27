@@ -65,6 +65,12 @@ const TENANT_SCOPED_MODELS = new Set([
   'VolunteerHours',
   'ChatSession',
   'ChatMessage',
+  'FundingRound',
+  'Grantee',
+  'GranteeApplication',
+  'ApplicationCategoryRequest',
+  'Evaluation',
+  'Allocation',
 ]);
 
 const READ_OR_DELETE_OPS = new Set([

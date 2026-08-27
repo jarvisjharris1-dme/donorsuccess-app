@@ -6,7 +6,17 @@ export type GrantCapability =
   | 'MANAGE_FINANCIALS'
   | 'MANAGE_DOCUMENTS'
   | 'COMMENT'
-  | 'DELETE_GRANTS';
+  | 'DELETE_GRANTS'
+  // Sub-granting (Phase 3C) — the org running the pooled fund, not the
+  // org applying to one. Kept as distinct capabilities from the ones
+  // above rather than reusing MANAGE_OPPORTUNITIES/MANAGE_FINANCIALS,
+  // since a GRANT_WRITER managing this org's own applications for
+  // outside funders shouldn't automatically be able to set up and run
+  // this org's own funding rounds for other agencies — the two
+  // directions of money need to be grantable independently.
+  | 'MANAGE_FUNDING_ROUNDS' // create/configure rounds, decide allocations
+  | 'MANAGE_APPLICATIONS' // create/edit grantees and their applications
+  | 'SCORE_APPLICATIONS'; // submit evaluations
 
 const GRANT_ROLE_CAPABILITIES: Record<GrantRole, GrantCapability[]> = {
   GRANT_ADMINISTRATOR: [
@@ -16,10 +26,13 @@ const GRANT_ROLE_CAPABILITIES: Record<GrantRole, GrantCapability[]> = {
     'MANAGE_DOCUMENTS',
     'COMMENT',
     'DELETE_GRANTS',
+    'MANAGE_FUNDING_ROUNDS',
+    'MANAGE_APPLICATIONS',
+    'SCORE_APPLICATIONS',
   ],
   GRANT_FINANCE_MANAGER: ['MANAGE_FINANCIALS', 'MANAGE_DOCUMENTS', 'COMMENT'],
-  GRANT_WRITER: ['MANAGE_OPPORTUNITIES', 'MANAGE_COMPLIANCE', 'MANAGE_DOCUMENTS', 'COMMENT'],
-  GRANT_REVIEWER: ['COMMENT'],
+  GRANT_WRITER: ['MANAGE_OPPORTUNITIES', 'MANAGE_COMPLIANCE', 'MANAGE_DOCUMENTS', 'COMMENT', 'MANAGE_APPLICATIONS'],
+  GRANT_REVIEWER: ['COMMENT', 'SCORE_APPLICATIONS'],
 };
 
 /**
@@ -46,7 +59,22 @@ export function hasGrantCapability(
   // existing Fundraiser on every existing customer's account would
   // lose grants access the moment this shipped, unless someone
   // separately assigned them a grant role.
-  if (role === Role.FUNDRAISER && capability !== 'DELETE_GRANTS') return true;
+  //
+  // The three sub-granting capabilities are excluded from that grant,
+  // unlike the pre-existing ones: there's no backward-compatibility
+  // concern (they never existed before), and unlike being able to
+  // request money as an applicant, this org's own Fundraisers
+  // shouldn't automatically be able to set up funding rounds, decide
+  // who receives money, or score outside agencies' applications — that
+  // needs an explicit grantRole assignment.
+  if (
+    role === Role.FUNDRAISER &&
+    capability !== 'DELETE_GRANTS' &&
+    capability !== 'MANAGE_FUNDING_ROUNDS' &&
+    capability !== 'MANAGE_APPLICATIONS' &&
+    capability !== 'SCORE_APPLICATIONS'
+  )
+    return true;
   // A dedicated grant role grants the same capabilities regardless of
   // base role — this is what lets a Viewer (who has no mutate access
   // anywhere else in the app) get real, scoped access to grants
@@ -74,8 +102,8 @@ export const GRANT_ROLE_LABELS: Record<GrantRole, string> = {
 };
 
 export const GRANT_ROLE_DESCRIPTIONS: Record<GrantRole, string> = {
-  GRANT_ADMINISTRATOR: 'Full control across the whole grants module, including deleting grants.',
+  GRANT_ADMINISTRATOR: 'Full control across the whole grants module, including deleting grants and running funding rounds.',
   GRANT_FINANCE_MANAGER: 'Manages budget, expenses, and disbursements. Read-only elsewhere.',
-  GRANT_WRITER: 'Manages applications, requirements, compliance, and documents.',
-  GRANT_REVIEWER: 'Read-only access, plus the ability to leave notes.',
+  GRANT_WRITER: 'Manages applications, requirements, compliance, documents, and grantee applications.',
+  GRANT_REVIEWER: 'Read-only access, plus the ability to leave notes and score grantee applications.',
 };
