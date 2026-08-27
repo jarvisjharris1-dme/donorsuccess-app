@@ -28,7 +28,7 @@ jobs:
           exit 1
 
   deploy:
-    name: Push Prisma schema to production
+    name: Apply additive Grants schema to production
     needs: validate
     runs-on: ubuntu-latest
     environment: production
@@ -68,16 +68,37 @@ jobs:
       - name: Validate Prisma schema
         run: npx prisma validate
 
-      - name: Show Prisma schema status
+      - name: Explain deployment mode
         run: |
-          echo "Repository currently uses Prisma db push rather than a migrations directory."
-          echo "Applying the checked-in main branch schema to the configured production database."
+          echo "Using a targeted additive SQL deployment."
+          echo "This workflow will NOT run prisma db push and will NOT drop unmanaged production tables."
+          echo "Protected existing tables include internal_orders and internal_customer_lifecycle."
 
-      - name: Deploy schema
-        run: npx prisma db push
+      - name: Apply Grants and Allocations schema
+        run: npx prisma db execute --file scripts/production/grants-allocations-additive.sql --url "$DIRECT_URL"
 
-      - name: Verify schema is synchronized
-        run: npx prisma db push
+      - name: Verify Grants tables with Prisma Client
+        run: |
+          node <<'NODE'
+          const { PrismaClient } = require('@prisma/client');
+          const prisma = new PrismaClient();
+          (async () => {
+            const [rounds, grantees, applications, requests, evaluations, allocations] = await Promise.all([
+              prisma.fundingRound.count(),
+              prisma.grantee.count(),
+              prisma.granteeApplication.count(),
+              prisma.applicationCategoryRequest.count(),
+              prisma.evaluation.count(),
+              prisma.allocation.count(),
+            ]);
+            console.log('Grants schema verified:', { rounds, grantees, applications, requests, evaluations, allocations });
+          })().catch((error) => {
+            console.error(error);
+            process.exit(1);
+          }).finally(async () => {
+            await prisma.$disconnect();
+          });
+          NODE
 
       - name: Deployment summary
         run: |
@@ -86,6 +107,8 @@ jobs:
           echo "- Branch: main" >> "$GITHUB_STEP_SUMMARY"
           echo "- Commit: $GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
           echo "- Prisma schema validated" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Production schema synchronized" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Grants & Allocations schema applied additively" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Existing unmanaged production tables preserved" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Prisma Client verified all six Grants/Allocations tables" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "This workflow intentionally uses prisma db push until the existing production database is baselined for Prisma Migrate." >> "$GITHUB_STEP_SUMMARY"
+          echo "This targeted workflow is temporary until the production database is baselined for Prisma Migrate." >> "$GITHUB_STEP_SUMMARY"
