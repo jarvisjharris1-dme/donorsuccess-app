@@ -1,5 +1,35 @@
 import type { Evaluation } from '@prisma/client';
 
+export const FUNDING_ROUND_STATUS_LABELS = {
+  DRAFT: 'Draft',
+  OPEN: 'Open',
+  REVIEWING: 'Reviewing',
+  DECIDED: 'Decided',
+  CLOSED: 'Closed',
+} as const;
+
+export const FUNDING_ROUND_STATUS_STYLES = {
+  DRAFT: 'bg-gray-100 text-gray-700',
+  OPEN: 'bg-emerald-100 text-emerald-700',
+  REVIEWING: 'bg-amber-100 text-amber-700',
+  DECIDED: 'bg-blue-100 text-blue-700',
+  CLOSED: 'bg-gray-200 text-gray-600',
+} as const;
+
+export const APPLICATION_STATUS_LABELS = {
+  DRAFT: 'Draft',
+  SUBMITTED: 'Submitted',
+  UNDER_REVIEW: 'Under Review',
+  DECIDED: 'Decided',
+} as const;
+
+export const APPLICATION_STATUS_STYLES = {
+  DRAFT: 'bg-gray-100 text-gray-700',
+  SUBMITTED: 'bg-blue-100 text-blue-700',
+  UNDER_REVIEW: 'bg-amber-100 text-amber-700',
+  DECIDED: 'bg-emerald-100 text-emerald-700',
+} as const;
+
 /**
  * Averages every reviewer's per-criterion scores into a single 0-5
  * number for an application — the structured replacement for reading
