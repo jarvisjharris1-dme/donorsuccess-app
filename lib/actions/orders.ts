@@ -4,7 +4,7 @@ import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { z } from 'zod';
 import { auth } from '@/auth';
-import { createOrder, getOrder, updateOrder } from '@/lib/orders';
+import { createOrder, getOrder, updateOrder, updateOnboardingTask } from '@/lib/orders';
 import { provisionOrder, sendOrderOwnerInvitation } from '@/lib/provisioning/provision-order';
 
 async function requirePlatformAdmin() {
@@ -38,48 +38,31 @@ function friendlyFulfillmentError(err: unknown) {
   return message;
 }
 
-export async function createSalesAssistedOrderAction(
-  _prev: OrderActionState,
-  formData: FormData,
-): Promise<OrderActionState> {
+export async function createSalesAssistedOrderAction(_prev: OrderActionState, formData: FormData): Promise<OrderActionState> {
   await requirePlatformAdmin();
   const parsed = newOrderSchema.safeParse({
-    organizationName: formData.get('organizationName'),
-    ownerName: formData.get('ownerName') || undefined,
-    ownerEmail: formData.get('ownerEmail'),
-    subscriptionTier: formData.get('subscriptionTier'),
-    billingPeriod: formData.get('billingPeriod') || undefined,
-    arr: formData.get('arr') || undefined,
-    oneTime: formData.get('oneTime') || undefined,
-    quoteId: formData.get('quoteId') || undefined,
-    turboSignDocumentId: formData.get('turboSignDocumentId') || undefined,
-    products: formData.get('products') || undefined,
+    organizationName: formData.get('organizationName'), ownerName: formData.get('ownerName') || undefined,
+    ownerEmail: formData.get('ownerEmail'), subscriptionTier: formData.get('subscriptionTier'),
+    billingPeriod: formData.get('billingPeriod') || undefined, arr: formData.get('arr') || undefined,
+    oneTime: formData.get('oneTime') || undefined, quoteId: formData.get('quoteId') || undefined,
+    turboSignDocumentId: formData.get('turboSignDocumentId') || undefined, products: formData.get('products') || undefined,
     notes: formData.get('notes') || undefined,
   });
   if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? 'Check the order details.' };
 
   try {
     const order = await createOrder({
-      source: 'TURBODOCX',
-      organizationName: parsed.data.organizationName,
-      ownerName: parsed.data.ownerName || null,
-      ownerEmail: parsed.data.ownerEmail,
-      subscriptionTier: parsed.data.subscriptionTier,
+      source: 'TURBODOCX', organizationName: parsed.data.organizationName, ownerName: parsed.data.ownerName || null,
+      ownerEmail: parsed.data.ownerEmail, subscriptionTier: parsed.data.subscriptionTier,
       billingPeriod: parsed.data.billingPeriod || null,
       arrCents: parsed.data.arr == null ? null : Math.round(parsed.data.arr * 100),
       oneTimeCents: parsed.data.oneTime == null ? null : Math.round(parsed.data.oneTime * 100),
-      quoteId: parsed.data.quoteId || null,
-      turboSignDocumentId: parsed.data.turboSignDocumentId || null,
+      quoteId: parsed.data.quoteId || null, turboSignDocumentId: parsed.data.turboSignDocumentId || null,
       products: parsed.data.products ? parsed.data.products.split(',').map((p) => p.trim()).filter(Boolean) : [],
       notes: parsed.data.notes || null,
     });
     revalidatePath('/admin/orders');
-    return {
-      success: parsed.data.turboSignDocumentId
-        ? 'Order created and linked to TurboSign.'
-        : 'Order created. TurboSign will auto-link it when the signature event arrives.',
-      orderId: order.id,
-    };
+    return { success: parsed.data.turboSignDocumentId ? 'Order created and linked to TurboSign.' : 'Order created. TurboSign will auto-link it when the signature event arrives.', orderId: order.id };
   } catch (err) {
     console.error('Create sales-assisted order failed:', err);
     return { error: err instanceof Error && err.message.includes('unique') ? 'That TurboSign document is already linked to an order.' : 'Could not create the order.' };
@@ -94,8 +77,7 @@ export async function provisionOrderAction(formData: FormData) {
     if (!order) throw new Error('Order not found.');
     if (!['SIGNED', 'FAILED'].includes(order.status)) throw new Error('Order must be signed before provisioning.');
     await provisionOrder(order);
-    revalidatePath('/admin/orders');
-    revalidatePath(`/admin/orders/${id}`);
+    revalidatePath('/admin/orders'); revalidatePath(`/admin/orders/${id}`);
   } catch (err) {
     console.error('Provision customer failed:', err);
     redirect(`/admin/orders/${id}?error=${encodeURIComponent(friendlyFulfillmentError(err))}`);
@@ -115,13 +97,30 @@ export async function retryOwnerInvitationAction(formData: FormData) {
     if (refreshed?.invitationSentAt && ['FAILED', 'PROVISIONING', 'SIGNED'].includes(refreshed.status)) {
       await updateOrder(id, { status: 'READY_FOR_KICKOFF', provisionedAt: refreshed.provisionedAt ?? new Date() });
     }
-    revalidatePath('/admin/orders');
-    revalidatePath(`/admin/orders/${id}`);
+    revalidatePath('/admin/orders'); revalidatePath(`/admin/orders/${id}`);
   } catch (err) {
     console.error('Retry owner invitation failed:', err);
     redirect(`/admin/orders/${id}?error=${encodeURIComponent(friendlyFulfillmentError(err))}`);
   }
   redirect(`/admin/orders/${id}?success=${encodeURIComponent('Owner invitation sent successfully.')}`);
+}
+
+export async function toggleOnboardingTaskAction(formData: FormData) {
+  await requirePlatformAdmin();
+  const id = String(formData.get('orderId') || '');
+  const taskId = String(formData.get('taskId') || '');
+  const completed = String(formData.get('completed') || '') === 'true';
+  try {
+    const order = await getOrder(id);
+    if (!order) throw new Error('Order not found.');
+    if (!order.activatedAt) throw new Error('Customer must activate their account before onboarding tasks can be updated.');
+    await updateOnboardingTask(id, taskId, completed);
+    revalidatePath('/admin/orders'); revalidatePath(`/admin/orders/${id}`);
+  } catch (err) {
+    console.error('Update onboarding task failed:', err);
+    redirect(`/admin/orders/${id}?error=${encodeURIComponent(friendlyFulfillmentError(err))}`);
+  }
+  redirect(`/admin/orders/${id}`);
 }
 
 export async function updateOrderStatusAction(formData: FormData) {
@@ -130,23 +129,16 @@ export async function updateOrderStatusAction(formData: FormData) {
   try {
     const status = String(formData.get('status') || '') as 'READY_FOR_KICKOFF' | 'IMPLEMENTATION' | 'FULFILLED';
     if (!['READY_FOR_KICKOFF', 'IMPLEMENTATION', 'FULFILLED'].includes(status)) throw new Error('Invalid fulfillment status.');
-
     const order = await getOrder(id);
     if (!order) throw new Error('Order not found.');
-    if (!order.organizationId || !order.entitlementsProvisionedAt || !order.invitationSentAt) {
-      throw new Error('Organization, entitlements, and owner invitation must be complete before fulfillment can advance.');
-    }
-    if (status === 'FULFILLED' && !order.onboardingStartedAt) {
-      throw new Error('Implementation must be started before the order can be marked fulfilled.');
-    }
-
+    if (!order.organizationId || !order.entitlementsProvisionedAt || !order.invitationSentAt) throw new Error('Organization, entitlements, and owner invitation must be complete before fulfillment can advance.');
+    if (status === 'FULFILLED' && !order.onboardingStartedAt) throw new Error('Implementation must be started before the order can be marked fulfilled.');
     await updateOrder(id, {
       status,
       onboardingStartedAt: status === 'IMPLEMENTATION' ? (order.onboardingStartedAt ?? new Date()) : undefined,
       fulfilledAt: status === 'FULFILLED' ? new Date() : undefined,
     });
-    revalidatePath('/admin/orders');
-    revalidatePath(`/admin/orders/${id}`);
+    revalidatePath('/admin/orders'); revalidatePath(`/admin/orders/${id}`);
   } catch (err) {
     console.error('Update fulfillment status failed:', err);
     redirect(`/admin/orders/${id}?error=${encodeURIComponent(friendlyFulfillmentError(err))}`);
