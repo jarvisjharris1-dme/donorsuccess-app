@@ -194,6 +194,12 @@ export const updateOrgSchema = z.object({
 
 export type UpdateOrgInput = z.infer<typeof updateOrgSchema>;
 
+export const updateProfileSchema = z.object({
+  name: z.string().trim().min(1, 'Enter your name').max(100, 'Name is too long'),
+});
+
+export type UpdateProfileInput = z.infer<typeof updateProfileSchema>;
+
 export const inviteSchema = z.object({
   email: emailField(),
   role: z.nativeEnum(Role),
@@ -240,3 +246,81 @@ export const changePasswordSchema = z
     message: 'New password must be different from your current password',
     path: ['newPassword'],
   });
+
+// ── Sub-granting (Phase 3C) ──────────────────────────────────────────────
+
+export const fundingRoundSchema = z.object({
+  name: z.string().trim().min(1, 'Give this round a name'),
+  description: optionalTrimmed(),
+  totalPool: z.coerce.number().nonnegative('Enter a total pool amount'),
+  opensAt: z.string().optional().nullable().transform((v) => (v ? v : undefined)),
+  closesAt: z.string().optional().nullable().transform((v) => (v ? v : undefined)),
+  // Submitted as newline-separated text from a textarea and split
+  // server-side — simpler than a dynamic add/remove row UI for what's
+  // usually a short, rarely-edited list set once at round setup.
+  categories: z
+    .string()
+    .transform((v) => v.split('\n').map((c) => c.trim()).filter(Boolean))
+    .pipe(z.array(z.string()).min(1, 'Add at least one service category')),
+  rubricCriteria: z
+    .string()
+    .transform((v) => v.split('\n').map((c) => c.trim()).filter(Boolean))
+    .pipe(z.array(z.string()).min(1, 'Add at least one scoring criterion')),
+});
+
+export type FundingRoundInput = z.infer<typeof fundingRoundSchema>;
+
+export const granteeSchema = z.object({
+  legalName: z.string().trim().min(1, "Enter the agency's legal name"),
+  ein: optionalTrimmed(),
+  contactName: optionalTrimmed(),
+  contactEmail: z
+    .string()
+    .trim()
+    .optional()
+    .nullable()
+    .transform((v) => (v ? v : undefined))
+    .refine((v) => !v || z.string().email().safeParse(v).success, 'Enter a valid email'),
+  contactPhone: optionalTrimmed(),
+  addressLine1: optionalTrimmed(),
+  addressLine2: optionalTrimmed(),
+  city: optionalTrimmed(),
+  state: optionalTrimmed(),
+  postalCode: optionalTrimmed(),
+  missionSummary: optionalTrimmed(),
+});
+
+export type GranteeInput = z.infer<typeof granteeSchema>;
+
+export const applicationCategoryRequestSchema = z.object({
+  category: z.string().trim().min(1),
+  requestedAmount: z.coerce.number().nonnegative('Enter a requested amount'),
+  targetPopulation: optionalTrimmed(),
+  intakeProcess: optionalTrimmed(),
+  deliveryMethod: optionalTrimmed(),
+  county: optionalTrimmed(),
+  serviceLocation: optionalTrimmed(),
+  unitsProjected: z.coerce.number().int().nonnegative().optional().nullable(),
+});
+
+export type ApplicationCategoryRequestInput = z.infer<typeof applicationCategoryRequestSchema>;
+
+export const evaluationSchema = z.object({
+  applicationId: z.string().min(1),
+  // One entry per FundingRound.rubricCriteria, each 0-5 — validated
+  // against the round's actual criteria count in the action itself
+  // (the schema alone can't know how many criteria this round has).
+  scores: z.array(z.coerce.number().int().min(0).max(5)).min(1, 'Score every criterion'),
+  comment: optionalTrimmed(),
+});
+
+export type EvaluationInput = z.infer<typeof evaluationSchema>;
+
+export const allocationSchema = z.object({
+  categoryRequestId: z.string().min(1),
+  allocatedAmount: z.coerce.number().nonnegative('Enter an allocated amount'),
+  awardAmount: z.coerce.number().nonnegative('Enter an award amount'),
+  adjustedAmount: z.coerce.number().nonnegative().optional().default(0),
+});
+
+export type AllocationInput = z.infer<typeof allocationSchema>;

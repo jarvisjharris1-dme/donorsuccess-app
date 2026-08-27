@@ -12,6 +12,7 @@ import {
   LifeBuoy,
   Landmark,
   Sparkles,
+  Building2,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -22,6 +23,7 @@ export const navItems: NavItem[] = [
   { label: 'Donors', href: '/donors', icon: Users },
   { label: 'Pipeline', href: '/pipeline', icon: GitBranch },
   { label: 'Grants', href: '/grants', icon: HandCoins },
+  { label: 'Allocations', href: '/funding-rounds', icon: Building2 },
   { label: 'Success Plans', href: '/plans', icon: Target },
   { label: 'Campaigns', href: '/campaigns', icon: Megaphone },
   { label: 'Board', href: '/board', icon: Landmark },
