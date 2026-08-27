@@ -28,14 +28,25 @@ async function ensureLifecycleTable() {
   initialized = true;
 }
 
+function parseDbDate(value: unknown): Date | null {
+  if (value == null || value === '') return null;
+  if (value instanceof Date && !Number.isNaN(value.getTime())) return value;
+  const raw = String(value).trim();
+  const match = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  const date = match
+    ? new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]), 12))
+    : new Date(raw);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
 function mapRow(row: Record<string, unknown>): CustomerLifecycleRecord {
   return {
     organizationId: String(row.organization_id),
-    renewalDate: row.renewal_date ? new Date(`${String(row.renewal_date).slice(0, 10)}T12:00:00.000Z`) : null,
+    renewalDate: parseDbDate(row.renewal_date),
     renewalOwner: row.renewal_owner ? String(row.renewal_owner) : null,
     renewalStatus: (String(row.renewal_status || 'NOT_SET') as CustomerLifecycleRecord['renewalStatus']),
     renewalNotes: row.renewal_notes ? String(row.renewal_notes) : null,
-    updatedAt: new Date(String(row.updated_at)),
+    updatedAt: parseDbDate(row.updated_at) ?? new Date(),
   };
 }
 
@@ -59,6 +70,8 @@ export async function saveCustomerRenewal(input: {
   renewalNotes?: string | null;
 }) {
   await ensureLifecycleTable();
+  const renewalDate = input.renewalDate?.trim() || null;
+  if (renewalDate && !/^\d{4}-\d{2}-\d{2}$/.test(renewalDate)) throw new Error('Renewal date must be a valid YYYY-MM-DD date.');
   const rows = await prisma.$queryRawUnsafe<Record<string, unknown>[]>(`
     INSERT INTO internal_customer_lifecycle (organization_id, renewal_date, renewal_owner, renewal_status, renewal_notes)
     VALUES ($1, $2::date, $3, $4, $5)
@@ -69,12 +82,12 @@ export async function saveCustomerRenewal(input: {
       renewal_notes = EXCLUDED.renewal_notes,
       updated_at = NOW()
     RETURNING *
-  `, input.organizationId, input.renewalDate || null, input.renewalOwner || null, input.renewalStatus || 'PLANNING', input.renewalNotes || null);
+  `, input.organizationId, renewalDate, input.renewalOwner || null, input.renewalStatus || 'PLANNING', input.renewalNotes || null);
   return mapRow(rows[0]);
 }
 
 export function daysToRenewal(date: Date | null) {
-  if (!date) return null;
+  if (!date || Number.isNaN(date.getTime())) return null;
   const today = new Date();
   const a = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate());
   const b = Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
