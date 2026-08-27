@@ -12,6 +12,13 @@ export type OrderStatus =
 
 export type OrderSource = 'TURBODOCX' | 'STRIPE' | 'MANUAL';
 
+export type OnboardingTask = {
+  id: string;
+  label: string;
+  description: string;
+  completedAt: string | null;
+};
+
 export type InternalOrder = {
   id: string;
   orderNumber: string;
@@ -35,7 +42,9 @@ export type InternalOrder = {
   provisionedAt: Date | null;
   entitlementsProvisionedAt: Date | null;
   invitationSentAt: Date | null;
+  activatedAt: Date | null;
   onboardingStartedAt: Date | null;
+  onboardingTasksJson: string | null;
   fulfilledAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
@@ -87,7 +96,9 @@ export async function ensureOrdersTable() {
       provisioned_at TIMESTAMPTZ,
       entitlements_provisioned_at TIMESTAMPTZ,
       invitation_sent_at TIMESTAMPTZ,
+      activated_at TIMESTAMPTZ,
       onboarding_started_at TIMESTAMPTZ,
+      onboarding_tasks_json TEXT,
       fulfilled_at TIMESTAMPTZ,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -95,10 +106,13 @@ export async function ensureOrdersTable() {
   `);
   await prisma.$executeRawUnsafe(`ALTER TABLE internal_orders ADD COLUMN IF NOT EXISTS entitlements_provisioned_at TIMESTAMPTZ`);
   await prisma.$executeRawUnsafe(`ALTER TABLE internal_orders ADD COLUMN IF NOT EXISTS invitation_sent_at TIMESTAMPTZ`);
+  await prisma.$executeRawUnsafe(`ALTER TABLE internal_orders ADD COLUMN IF NOT EXISTS activated_at TIMESTAMPTZ`);
   await prisma.$executeRawUnsafe(`ALTER TABLE internal_orders ADD COLUMN IF NOT EXISTS onboarding_started_at TIMESTAMPTZ`);
+  await prisma.$executeRawUnsafe(`ALTER TABLE internal_orders ADD COLUMN IF NOT EXISTS onboarding_tasks_json TEXT`);
   await prisma.$executeRawUnsafe(`ALTER TABLE internal_orders ADD COLUMN IF NOT EXISTS fulfilled_at TIMESTAMPTZ`);
   await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS internal_orders_status_idx ON internal_orders(status)`);
   await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS internal_orders_created_at_idx ON internal_orders(created_at DESC)`);
+  await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS internal_orders_org_id_idx ON internal_orders(organization_id)`);
   initialized = true;
 }
 
@@ -119,7 +133,9 @@ function mapRow(row: Record<string, unknown>): InternalOrder {
     provisionedAt: row.provisioned_at ? new Date(String(row.provisioned_at)) : null,
     entitlementsProvisionedAt: row.entitlements_provisioned_at ? new Date(String(row.entitlements_provisioned_at)) : null,
     invitationSentAt: row.invitation_sent_at ? new Date(String(row.invitation_sent_at)) : null,
+    activatedAt: row.activated_at ? new Date(String(row.activated_at)) : null,
     onboardingStartedAt: row.onboarding_started_at ? new Date(String(row.onboarding_started_at)) : null,
+    onboardingTasksJson: row.onboarding_tasks_json ? String(row.onboarding_tasks_json) : null,
     fulfilledAt: row.fulfilled_at ? new Date(String(row.fulfilled_at)) : null,
     createdAt: new Date(String(row.created_at)), updatedAt: new Date(String(row.updated_at)),
   };
@@ -141,30 +157,69 @@ export async function createOrder(input: CreateOrderInput): Promise<InternalOrde
 
 export async function listOrders(): Promise<InternalOrder[]> { await ensureOrdersTable(); return (await prisma.$queryRawUnsafe<Record<string, unknown>[]>(`SELECT * FROM internal_orders ORDER BY created_at DESC LIMIT 250`)).map(mapRow); }
 export async function getOrder(id: string): Promise<InternalOrder | null> { await ensureOrdersTable(); const rows = await prisma.$queryRawUnsafe<Record<string, unknown>[]>(`SELECT * FROM internal_orders WHERE id = $1 LIMIT 1`, id); return rows[0] ? mapRow(rows[0]) : null; }
+export async function getOrderByOrganizationId(organizationId: string): Promise<InternalOrder | null> { await ensureOrdersTable(); const rows = await prisma.$queryRawUnsafe<Record<string, unknown>[]>(`SELECT * FROM internal_orders WHERE organization_id = $1 ORDER BY created_at DESC LIMIT 1`, organizationId); return rows[0] ? mapRow(rows[0]) : null; }
 export async function getOrderByTurboSignDocumentId(documentId: string): Promise<InternalOrder | null> { await ensureOrdersTable(); const rows = await prisma.$queryRawUnsafe<Record<string, unknown>[]>(`SELECT * FROM internal_orders WHERE turbosign_document_id = $1 LIMIT 1`, documentId); return rows[0] ? mapRow(rows[0]) : null; }
 export async function getOrderByStripeSessionId(sessionId: string): Promise<InternalOrder | null> { await ensureOrdersTable(); const rows = await prisma.$queryRawUnsafe<Record<string, unknown>[]>(`SELECT * FROM internal_orders WHERE stripe_checkout_session_id = $1 LIMIT 1`, sessionId); return rows[0] ? mapRow(rows[0]) : null; }
 export async function findPendingTurboDocxOrders(): Promise<InternalOrder[]> { await ensureOrdersTable(); const rows = await prisma.$queryRawUnsafe<Record<string, unknown>[]>(`SELECT * FROM internal_orders WHERE source = 'TURBODOCX' AND status = 'PENDING_SIGNATURE' ORDER BY created_at DESC LIMIT 100`); return rows.map(mapRow); }
 
-function normalizeMatchText(value: string) {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
-}
+function normalizeMatchText(value: string) { return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim(); }
 
 export async function findPendingTurboDocxOrderByDocumentTitle(title: string): Promise<InternalOrder | null> {
-  const normalizedTitle = normalizeMatchText(title);
-  if (!normalizedTitle) return null;
-
+  const normalizedTitle = normalizeMatchText(title); if (!normalizedTitle) return null;
   const pending = await findPendingTurboDocxOrders();
   const matches = pending.filter((order) => {
     const organization = normalizeMatchText(order.organizationName);
     const quote = order.quoteId ? normalizeMatchText(order.quoteId) : '';
     return (organization.length > 1 && normalizedTitle.includes(organization)) || (quote.length > 1 && normalizedTitle.includes(quote));
   });
-
   return matches.length === 1 ? matches[0] : null;
 }
 
-export async function updateOrder(id: string, changes: Partial<Pick<InternalOrder, 'status' | 'organizationId' | 'signedAt' | 'provisionedAt' | 'notes' | 'stripeSubscriptionId' | 'turboSignDocumentId' | 'entitlementsProvisionedAt' | 'invitationSentAt' | 'onboardingStartedAt' | 'fulfilledAt'>>) {
+export function defaultOnboardingTasks(activatedAt = new Date()): OnboardingTask[] {
+  return [
+    { id: 'account', label: 'Account activated', description: 'Owner accepted the invitation and activated the Donor Success workspace.', completedAt: activatedAt.toISOString() },
+    { id: 'kickoff', label: 'Kickoff completed', description: 'Confirm goals, timeline, team roles, and launch plan.', completedAt: null },
+    { id: 'data', label: 'Donor data loaded', description: 'Import or connect the initial donor file and validate records.', completedAt: null },
+    { id: 'team', label: 'Team access configured', description: 'Invite the working team and confirm permissions.', completedAt: null },
+    { id: 'journey', label: 'First donor journey configured', description: 'Configure the first journey, playbook, or engagement workflow.', completedAt: null },
+    { id: 'launch', label: 'Launch review complete', description: 'Review readiness, reporting, and next-30-day success plan.', completedAt: null },
+  ];
+}
+
+export function parseOnboardingTasks(order: InternalOrder): OnboardingTask[] {
+  if (!order.onboardingTasksJson) return [];
+  try { return JSON.parse(order.onboardingTasksJson) as OnboardingTask[]; } catch { return []; }
+}
+
+export async function activateOrderOnboardingByOrganizationId(organizationId: string) {
+  const order = await getOrderByOrganizationId(organizationId);
+  if (!order || order.status === 'VOIDED') return null;
+  const now = new Date();
+  const tasks = parseOnboardingTasks(order);
+  const nextTasks = tasks.length ? tasks.map((t) => t.id === 'account' && !t.completedAt ? { ...t, completedAt: now.toISOString() } : t) : defaultOnboardingTasks(now);
+  return updateOrder(order.id, {
+    status: order.status === 'FULFILLED' ? 'FULFILLED' : 'IMPLEMENTATION',
+    activatedAt: order.activatedAt ?? now,
+    onboardingStartedAt: order.onboardingStartedAt ?? now,
+    onboardingTasksJson: JSON.stringify(nextTasks),
+  });
+}
+
+export async function updateOnboardingTask(orderId: string, taskId: string, completed: boolean) {
+  const order = await getOrder(orderId); if (!order) return null;
+  const tasks = parseOnboardingTasks(order); if (!tasks.length) return order;
+  const now = new Date().toISOString();
+  const nextTasks = tasks.map((task) => task.id === taskId ? { ...task, completedAt: completed ? (task.completedAt ?? now) : null } : task);
+  const allComplete = nextTasks.every((task) => Boolean(task.completedAt));
+  return updateOrder(orderId, {
+    onboardingTasksJson: JSON.stringify(nextTasks),
+    status: allComplete ? 'FULFILLED' : 'IMPLEMENTATION',
+    fulfilledAt: allComplete ? (order.fulfilledAt ?? new Date()) : null,
+  });
+}
+
+export async function updateOrder(id: string, changes: Partial<Pick<InternalOrder, 'status' | 'organizationId' | 'signedAt' | 'provisionedAt' | 'notes' | 'stripeSubscriptionId' | 'turboSignDocumentId' | 'entitlementsProvisionedAt' | 'invitationSentAt' | 'activatedAt' | 'onboardingStartedAt' | 'onboardingTasksJson' | 'fulfilledAt'>>) {
   await ensureOrdersTable(); const current = await getOrder(id); if (!current) return null;
-  const rows = await prisma.$queryRawUnsafe<Record<string, unknown>[]>(`UPDATE internal_orders SET status=$2, organization_id=$3, signed_at=$4, provisioned_at=$5, notes=$6, stripe_subscription_id=$7, turbosign_document_id=$8, entitlements_provisioned_at=$9, invitation_sent_at=$10, onboarding_started_at=$11, fulfilled_at=$12, updated_at=NOW() WHERE id=$1 RETURNING *`, id, changes.status ?? current.status, changes.organizationId ?? current.organizationId, changes.signedAt ?? current.signedAt, changes.provisionedAt ?? current.provisionedAt, changes.notes ?? current.notes, changes.stripeSubscriptionId ?? current.stripeSubscriptionId, changes.turboSignDocumentId ?? current.turboSignDocumentId, changes.entitlementsProvisionedAt ?? current.entitlementsProvisionedAt, changes.invitationSentAt ?? current.invitationSentAt, changes.onboardingStartedAt ?? current.onboardingStartedAt, changes.fulfilledAt ?? current.fulfilledAt);
+  const rows = await prisma.$queryRawUnsafe<Record<string, unknown>[]>(`UPDATE internal_orders SET status=$2, organization_id=$3, signed_at=$4, provisioned_at=$5, notes=$6, stripe_subscription_id=$7, turbosign_document_id=$8, entitlements_provisioned_at=$9, invitation_sent_at=$10, activated_at=$11, onboarding_started_at=$12, onboarding_tasks_json=$13, fulfilled_at=$14, updated_at=NOW() WHERE id=$1 RETURNING *`, id, changes.status ?? current.status, changes.organizationId ?? current.organizationId, changes.signedAt ?? current.signedAt, changes.provisionedAt ?? current.provisionedAt, changes.notes ?? current.notes, changes.stripeSubscriptionId ?? current.stripeSubscriptionId, changes.turboSignDocumentId ?? current.turboSignDocumentId, changes.entitlementsProvisionedAt ?? current.entitlementsProvisionedAt, changes.invitationSentAt ?? current.invitationSentAt, changes.activatedAt ?? current.activatedAt, changes.onboardingStartedAt ?? current.onboardingStartedAt, changes.onboardingTasksJson ?? current.onboardingTasksJson, Object.prototype.hasOwnProperty.call(changes, 'fulfilledAt') ? changes.fulfilledAt : current.fulfilledAt);
   return rows[0] ? mapRow(rows[0]) : null;
 }
