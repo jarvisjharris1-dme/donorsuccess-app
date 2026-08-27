@@ -40,8 +40,9 @@ export async function sendOrderOwnerInvitation(order: InternalOrder) {
 
   const existingUser = await prisma.user.findUnique({ where: { email: order.ownerEmail.toLowerCase() } });
   if (existingUser) {
-    await updateOrder(order.id, { invitationSentAt: order.invitationSentAt ?? new Date() });
-    return { alreadyActive: true };
+    const sentAt = order.invitationSentAt ?? new Date();
+    await updateOrder(order.id, { invitationSentAt: sentAt });
+    return { alreadyActive: true, sentAt };
   }
 
   const platformAdmin = await prisma.user.findFirst({ where: { isPlatformAdmin: true } });
@@ -53,8 +54,9 @@ export async function sendOrderOwnerInvitation(order: InternalOrder) {
   });
 
   if (invitation?.acceptedAt) {
-    await updateOrder(order.id, { invitationSentAt: order.invitationSentAt ?? invitation.createdAt });
-    return { alreadyAccepted: true };
+    const sentAt = order.invitationSentAt ?? invitation.createdAt;
+    await updateOrder(order.id, { invitationSentAt: sentAt });
+    return { alreadyAccepted: true, sentAt };
   }
 
   const token = generateToken();
@@ -101,7 +103,12 @@ export async function sendOrderOwnerInvitation(order: InternalOrder) {
 
 export async function provisionOrder(order: InternalOrder) {
   if (order.organizationId) {
-    if (!order.invitationSentAt) await sendOrderOwnerInvitation(order);
+    if (!order.invitationSentAt) {
+      await sendOrderOwnerInvitation(order);
+      const refreshed = await prisma.organization.findUnique({ where: { id: order.organizationId } });
+      await updateOrder(order.id, { status: 'READY_FOR_KICKOFF', provisionedAt: order.provisionedAt ?? new Date() });
+      return refreshed;
+    }
     return prisma.organization.findUnique({ where: { id: order.organizationId } });
   }
 
@@ -140,7 +147,14 @@ export async function provisionOrder(order: InternalOrder) {
   try {
     await sendOrderOwnerInvitation(refreshed);
   } catch (err) {
+    const reason = err instanceof Error ? err.message : 'Unknown email delivery error';
     console.error('Order provisioning invitation email failed:', err);
+    await updateOrder(order.id, {
+      status: 'FAILED',
+      organizationId: organization.id,
+      notes: `${order.notes ? `${order.notes}\n\n` : ''}Provisioning paused: owner invitation could not be sent. ${reason}`,
+    });
+    throw err;
   }
 
   await updateOrder(order.id, {
