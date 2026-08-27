@@ -30,6 +30,14 @@ const newOrderSchema = z.object({
 
 export type OrderActionState = { error?: string; success?: string; orderId?: string } | undefined;
 
+function friendlyFulfillmentError(err: unknown) {
+  const message = err instanceof Error ? err.message : 'The fulfillment action failed.';
+  if (message.includes('You can only send testing emails')) {
+    return 'Owner invitation could not be sent because the Resend sending domain is not verified. Verify donorsuccess.com in Resend and set EMAIL_FROM to an address on that domain, then retry.';
+  }
+  return message;
+}
+
 export async function createSalesAssistedOrderAction(
   _prev: OrderActionState,
   formData: FormData,
@@ -81,49 +89,67 @@ export async function createSalesAssistedOrderAction(
 export async function provisionOrderAction(formData: FormData) {
   await requirePlatformAdmin();
   const id = String(formData.get('orderId') || '');
-  const order = await getOrder(id);
-  if (!order) throw new Error('Order not found.');
-  if (!['SIGNED', 'FAILED'].includes(order.status)) throw new Error('Order must be signed before provisioning.');
-  await provisionOrder(order);
-  revalidatePath('/admin/orders');
-  revalidatePath(`/admin/orders/${id}`);
+  try {
+    const order = await getOrder(id);
+    if (!order) throw new Error('Order not found.');
+    if (!['SIGNED', 'FAILED'].includes(order.status)) throw new Error('Order must be signed before provisioning.');
+    await provisionOrder(order);
+    revalidatePath('/admin/orders');
+    revalidatePath(`/admin/orders/${id}`);
+  } catch (err) {
+    console.error('Provision customer failed:', err);
+    redirect(`/admin/orders/${id}?error=${encodeURIComponent(friendlyFulfillmentError(err))}`);
+  }
+  redirect(`/admin/orders/${id}?success=${encodeURIComponent('Customer provisioning completed.')}`);
 }
 
 export async function retryOwnerInvitationAction(formData: FormData) {
   await requirePlatformAdmin();
   const id = String(formData.get('orderId') || '');
-  const order = await getOrder(id);
-  if (!order) throw new Error('Order not found.');
-  if (!order.organizationId) throw new Error('Customer organization has not been provisioned yet.');
-  await sendOrderOwnerInvitation(order);
-  const refreshed = await getOrder(id);
-  if (refreshed?.invitationSentAt && ['FAILED', 'PROVISIONING', 'SIGNED'].includes(refreshed.status)) {
-    await updateOrder(id, { status: 'READY_FOR_KICKOFF', provisionedAt: refreshed.provisionedAt ?? new Date() });
+  try {
+    const order = await getOrder(id);
+    if (!order) throw new Error('Order not found.');
+    if (!order.organizationId) throw new Error('Customer organization has not been provisioned yet.');
+    await sendOrderOwnerInvitation(order);
+    const refreshed = await getOrder(id);
+    if (refreshed?.invitationSentAt && ['FAILED', 'PROVISIONING', 'SIGNED'].includes(refreshed.status)) {
+      await updateOrder(id, { status: 'READY_FOR_KICKOFF', provisionedAt: refreshed.provisionedAt ?? new Date() });
+    }
+    revalidatePath('/admin/orders');
+    revalidatePath(`/admin/orders/${id}`);
+  } catch (err) {
+    console.error('Retry owner invitation failed:', err);
+    redirect(`/admin/orders/${id}?error=${encodeURIComponent(friendlyFulfillmentError(err))}`);
   }
-  revalidatePath('/admin/orders');
-  revalidatePath(`/admin/orders/${id}`);
+  redirect(`/admin/orders/${id}?success=${encodeURIComponent('Owner invitation sent successfully.')}`);
 }
 
 export async function updateOrderStatusAction(formData: FormData) {
   await requirePlatformAdmin();
   const id = String(formData.get('orderId') || '');
-  const status = String(formData.get('status') || '') as 'READY_FOR_KICKOFF' | 'IMPLEMENTATION' | 'FULFILLED';
-  if (!['READY_FOR_KICKOFF', 'IMPLEMENTATION', 'FULFILLED'].includes(status)) throw new Error('Invalid fulfillment status.');
+  try {
+    const status = String(formData.get('status') || '') as 'READY_FOR_KICKOFF' | 'IMPLEMENTATION' | 'FULFILLED';
+    if (!['READY_FOR_KICKOFF', 'IMPLEMENTATION', 'FULFILLED'].includes(status)) throw new Error('Invalid fulfillment status.');
 
-  const order = await getOrder(id);
-  if (!order) throw new Error('Order not found.');
-  if (!order.organizationId || !order.entitlementsProvisionedAt || !order.invitationSentAt) {
-    throw new Error('Organization, entitlements, and owner invitation must be complete before fulfillment can advance.');
-  }
-  if (status === 'FULFILLED' && !order.onboardingStartedAt) {
-    throw new Error('Implementation must be started before the order can be marked fulfilled.');
-  }
+    const order = await getOrder(id);
+    if (!order) throw new Error('Order not found.');
+    if (!order.organizationId || !order.entitlementsProvisionedAt || !order.invitationSentAt) {
+      throw new Error('Organization, entitlements, and owner invitation must be complete before fulfillment can advance.');
+    }
+    if (status === 'FULFILLED' && !order.onboardingStartedAt) {
+      throw new Error('Implementation must be started before the order can be marked fulfilled.');
+    }
 
-  await updateOrder(id, {
-    status,
-    onboardingStartedAt: status === 'IMPLEMENTATION' ? (order.onboardingStartedAt ?? new Date()) : undefined,
-    fulfilledAt: status === 'FULFILLED' ? new Date() : undefined,
-  });
-  revalidatePath('/admin/orders');
-  revalidatePath(`/admin/orders/${id}`);
+    await updateOrder(id, {
+      status,
+      onboardingStartedAt: status === 'IMPLEMENTATION' ? (order.onboardingStartedAt ?? new Date()) : undefined,
+      fulfilledAt: status === 'FULFILLED' ? new Date() : undefined,
+    });
+    revalidatePath('/admin/orders');
+    revalidatePath(`/admin/orders/${id}`);
+  } catch (err) {
+    console.error('Update fulfillment status failed:', err);
+    redirect(`/admin/orders/${id}?error=${encodeURIComponent(friendlyFulfillmentError(err))}`);
+  }
+  redirect(`/admin/orders/${id}`);
 }
