@@ -8,6 +8,9 @@ import {
   Cloud,
   Settings,
   HandCoins,
+  Landmark,
+  Globe2,
+  Sparkles,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -22,6 +25,9 @@ export const CATEGORY_META: Record<string, CategoryMeta> = {
   Donors: { icon: Users, iconBg: 'bg-[#EEEDFE]', iconColor: 'text-[#3C3489]' },
   'Pipeline & Success Plans': { icon: Target, iconBg: 'bg-[#FAECE7]', iconColor: 'text-[#712B13]' },
   Grants: { icon: HandCoins, iconBg: 'bg-[#E6F1FB]', iconColor: 'text-[#0C447C]' },
+  'Board Engagement': { icon: Landmark, iconBg: 'bg-evergreen/10', iconColor: 'text-evergreen' },
+  'Community Portal': { icon: Globe2, iconBg: 'bg-teal/10', iconColor: 'text-teal' },
+  'Jarvis & Insights': { icon: Sparkles, iconBg: 'bg-[#EEEDFE]', iconColor: 'text-[#3C3489]' },
   Campaigns: { icon: Megaphone, iconBg: 'bg-[#FBEAF0]', iconColor: 'text-[#72243E]' },
   'Email & Communication': { icon: Mail, iconBg: 'bg-sky/10', iconColor: 'text-sky' },
   Reports: { icon: BarChart3, iconBg: 'bg-[#EAF3DE]', iconColor: 'text-[#27500A]' },
