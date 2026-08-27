@@ -1,83 +1,30 @@
 import Link from 'next/link';
-import { Plus, Building2 } from 'lucide-react';
+import { Plus, Building2, ShoppingCart, Rocket, AlertTriangle, Users, Database, ArrowRight } from 'lucide-react';
 import { prisma } from '@/lib/db';
 import { formatDate } from '@/lib/format';
+import { listOrders } from '@/lib/orders';
 
 export default async function AdminOrganizationsPage() {
-  // Raw `prisma` client, deliberately — this page's entire purpose is a
-  // cross-organization view, which is exactly what forOrg() exists to
-  // prevent everywhere else. Access to this page itself is already
-  // gated to isPlatformAdmin by the layout and middleware.
-  const organizations = await prisma.organization.findMany({
-    orderBy: { createdAt: 'desc' },
-    include: {
-      _count: { select: { users: true, donors: true } },
-    },
-  });
+  const [organizations, orders] = await Promise.all([
+    prisma.organization.findMany({ orderBy:{createdAt:'desc'}, include:{_count:{select:{users:true,donors:true}}} }),
+    listOrders(),
+  ]);
+  const totalUsers=organizations.reduce((n,o)=>n+o._count.users,0), totalDonors=organizations.reduce((n,o)=>n+o._count.donors,0);
+  const attention=orders.filter(o=>['FAILED','PENDING_SIGNATURE'].includes(o.status)||(o.organizationId&&!o.activatedAt));
+  const onboarding=orders.filter(o=>['READY_FOR_KICKOFF','IMPLEMENTATION'].includes(o.status));
+  const fulfilled=orders.filter(o=>o.status==='FULFILLED').length;
 
-  return (
-    <div>
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-extrabold text-white">Organizations</h1>
-          <p className="mt-1 text-sm text-gray-400">
-            {organizations.length} customer{organizations.length === 1 ? '' : 's'}
-          </p>
-        </div>
-        <Link
-          href="/admin/organizations/new"
-          className="flex items-center gap-2 rounded-xl bg-evergreen px-5 py-3 text-[14px] font-semibold text-white transition-all hover:-translate-y-0.5 hover:bg-[#0d685f]"
-        >
-          <Plus size={16} />
-          New Customer
-        </Link>
-      </div>
+  return <div className="space-y-7">
+    <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between"><div><p className="text-xs font-bold uppercase tracking-[.18em] text-teal">Platform Command Center</p><h1 className="mt-2 text-3xl font-extrabold text-white">Donor Success Admin</h1><p className="mt-1 text-sm text-gray-400">Customers, fulfillment, onboarding and platform operations in one view.</p></div><div className="flex gap-2"><Link href="/admin/orders" className="rounded-xl border border-gray-700 px-4 py-2.5 text-sm font-bold text-white">Orders & Fulfillment</Link><Link href="/admin/organizations/new" className="flex items-center gap-2 rounded-xl bg-evergreen px-4 py-2.5 text-sm font-bold text-white"><Plus size={16}/>New Customer</Link></div></div>
 
-      <div className="mt-6 overflow-hidden rounded-[16px] border border-gray-800 bg-gray-800/40">
-        <table className="w-full text-left text-sm">
-          <thead>
-            <tr className="border-b border-gray-800 text-xs font-semibold uppercase tracking-wide text-gray-500">
-              <th className="px-5 py-3.5">Organization</th>
-              <th className="px-5 py-3.5">Tier</th>
-              <th className="px-5 py-3.5">Team</th>
-              <th className="px-5 py-3.5">Donors</th>
-              <th className="px-5 py-3.5">Created</th>
-            </tr>
-          </thead>
-          <tbody>
-            {organizations.length === 0 && (
-              <tr>
-                <td colSpan={5} className="px-5 py-10 text-center text-sm text-gray-500">
-                  No customer organizations yet.
-                </td>
-              </tr>
-            )}
-            {organizations.map((org) => (
-              <tr key={org.id} className="border-b border-gray-800 last:border-0 hover:bg-gray-800/50">
-                <td className="px-5 py-3.5">
-                  <Link href={`/admin/organizations/${org.id}`} className="flex items-center gap-3">
-                    <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-evergreen/20">
-                      <Building2 size={15} className="text-evergreen" />
-                    </div>
-                    <div>
-                      <div className="font-semibold text-white">{org.name}</div>
-                      <div className="text-xs text-gray-500">{org.slug}</div>
-                    </div>
-                  </Link>
-                </td>
-                <td className="px-5 py-3.5">
-                  <span className="rounded-full bg-gray-800 px-2.5 py-1 text-[11px] font-semibold capitalize text-gray-300">
-                    {org.subscriptionTier.toLowerCase()}
-                  </span>
-                </td>
-                <td className="px-5 py-3.5 text-gray-300">{org._count.users}</td>
-                <td className="px-5 py-3.5 text-gray-300">{org._count.donors}</td>
-                <td className="px-5 py-3.5 text-gray-400">{formatDate(org.createdAt.toISOString())}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
+    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5"><Metric icon={<Building2 size={18}/>} label="Customers" value={organizations.length}/><Metric icon={<Users size={18}/>} label="Platform Users" value={totalUsers}/><Metric icon={<Database size={18}/>} label="Donor Records" value={totalDonors.toLocaleString()}/><Metric icon={<Rocket size={18}/>} label="In Onboarding" value={onboarding.length}/><Metric icon={<ShoppingCart size={18}/>} label="Fulfilled Orders" value={fulfilled}/></div>
+
+    {attention.length>0&&<section className="rounded-2xl border border-amber-500/20 bg-amber-500/5 p-5"><div className="flex items-center gap-2 text-amber-300"><AlertTriangle size={18}/><h2 className="font-extrabold">Needs Attention</h2></div><div className="mt-4 grid gap-3 md:grid-cols-2">{attention.slice(0,6).map(o=><Link key={o.id} href={`/admin/orders/${o.id}`} className="flex items-center justify-between rounded-xl border border-gray-700 bg-gray-900/40 p-4"><div><div className="font-bold text-white">{o.organizationName}</div><div className="mt-1 text-xs text-gray-500">{o.status.replaceAll('_',' ')} · {o.ownerEmail}</div></div><ArrowRight size={16} className="text-gray-500"/></Link>)}</div></section>}
+
+    <div className="grid gap-5 lg:grid-cols-3"><section className="rounded-2xl border border-gray-800 bg-gray-800/40 p-5 lg:col-span-2"><div className="flex items-center justify-between"><div><h2 className="font-extrabold text-white">Customer Organizations</h2><p className="mt-1 text-xs text-gray-500">Latest customer workspaces and usage footprint.</p></div><span className="text-xs font-bold text-gray-500">{organizations.length} total</span></div><div className="mt-4 overflow-x-auto"><table className="w-full text-left text-sm"><thead><tr className="border-b border-gray-800 text-xs uppercase text-gray-500"><th className="py-3">Organization</th><th>Tier</th><th>Team</th><th>Donors</th><th>Created</th></tr></thead><tbody>{organizations.slice(0,12).map(org=><tr key={org.id} className="border-b border-gray-800 last:border-0"><td className="py-3"><Link href={`/admin/organizations/${org.id}`} className="font-semibold text-white hover:text-teal">{org.name}</Link><div className="text-xs text-gray-600">{org.slug}</div></td><td><span className="rounded-full bg-gray-800 px-2.5 py-1 text-[11px] font-semibold text-gray-300">{org.subscriptionTier}</span></td><td className="text-gray-300">{org._count.users}</td><td className="text-gray-300">{org._count.donors}</td><td className="text-gray-500">{formatDate(org.createdAt.toISOString())}</td></tr>)}</tbody></table></div></section>
+      <section className="rounded-2xl border border-gray-800 bg-gray-800/40 p-5"><h2 className="font-extrabold text-white">Operational Controls</h2><p className="mt-1 text-xs text-gray-500">High-value admin workflows.</p><div className="mt-5 space-y-2"><Control href="/admin/orders" title="Orders & Fulfillment" detail="Contracts, provisioning and onboarding"/><Control href="/admin/organizations/new" title="Create Customer" detail="Manual workspace creation"/><Control href="/admin" title="Customer Directory" detail="Organizations, users and donor volume"/></div><div className="mt-6 rounded-xl bg-gray-900/50 p-4"><div className="text-xs font-bold uppercase text-gray-500">Pipeline snapshot</div><div className="mt-3 space-y-2 text-sm"><Row label="Pending signature" value={orders.filter(o=>o.status==='PENDING_SIGNATURE').length}/><Row label="Ready for kickoff" value={orders.filter(o=>o.status==='READY_FOR_KICKOFF').length}/><Row label="Implementation" value={orders.filter(o=>o.status==='IMPLEMENTATION').length}/><Row label="Failed" value={orders.filter(o=>o.status==='FAILED').length}/></div></div></section></div>
+  </div>;
 }
+function Metric({icon,label,value}:{icon:React.ReactNode;label:string;value:number|string}){return <div className="rounded-2xl border border-gray-800 bg-gray-800/40 p-4"><div className="flex items-center gap-2 text-teal">{icon}<span className="text-xs font-bold uppercase tracking-wide text-gray-500">{label}</span></div><div className="mt-3 text-2xl font-black text-white">{value}</div></div>}
+function Control({href,title,detail}:{href:string;title:string;detail:string}){return <Link href={href} className="flex items-center justify-between rounded-xl border border-gray-700 p-3 hover:bg-gray-800"><div><div className="text-sm font-bold text-white">{title}</div><div className="text-xs text-gray-500">{detail}</div></div><ArrowRight size={15} className="text-gray-500"/></Link>}
+function Row({label,value}:{label:string;value:number}){return <div className="flex justify-between"><span className="text-gray-400">{label}</span><span className="font-bold text-white">{value}</span></div>}
