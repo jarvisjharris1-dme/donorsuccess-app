@@ -19,10 +19,32 @@ export function renewalStage(record: CustomerLifecycleRecord | null): RenewalSta
 }
 
 export function stageLabel(stage: RenewalStage) {
-  return ({NO_DATE:'Date Needed',180_DAY:'180-Day Discovery',120_DAY:'120-Day Value Review',90_DAY:'90-Day Renewal Plan',60_DAY:'60-Day Decision',30_DAY:'30-Day Close',DUE:'Due Today',OVERDUE:'Overdue',RENEWED:'Renewed'})[stage];
+  const labels: Record<RenewalStage,string> = {
+    NO_DATE:'Date Needed',
+    '180_DAY':'180-Day Discovery',
+    '120_DAY':'120-Day Value Review',
+    '90_DAY':'90-Day Renewal Plan',
+    '60_DAY':'60-Day Decision',
+    '30_DAY':'30-Day Close',
+    DUE:'Due Today',
+    OVERDUE:'Overdue',
+    RENEWED:'Renewed',
+  };
+  return labels[stage];
 }
 
-const stageRank: Record<RenewalStage,number>={NO_DATE:0,180_DAY:1,120_DAY:2,90_DAY:3,60_DAY:4,30_DAY:5,DUE:6,OVERDUE:7,RENEWED:8};
+const stageRank: Record<RenewalStage,number>={
+  NO_DATE:0,
+  '180_DAY':1,
+  '120_DAY':2,
+  '90_DAY':3,
+  '60_DAY':4,
+  '30_DAY':5,
+  DUE:6,
+  OVERDUE:7,
+  RENEWED:8,
+};
+
 export function playbookFor(record: CustomerLifecycleRecord | null): RenewalPlaybookStep[] {
   const stage=renewalStage(record), rank=stageRank[stage];
   const steps=[
