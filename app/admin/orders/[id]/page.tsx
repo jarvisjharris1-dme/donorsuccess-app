@@ -12,8 +12,9 @@ function when(value: Date | null) {
   return value ? value.toLocaleString() : 'Pending';
 }
 
-export default async function OrderDetailPage({ params }: { params: Promise<{ id: string }> }) {
+export default async function OrderDetailPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams?: Promise<{ error?: string; success?: string }> }) {
   const { id } = await params;
+  const messages = searchParams ? await searchParams : {};
   const order = await getOrder(id);
   if (!order) notFound();
 
@@ -51,6 +52,9 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
         </div>
         {order.organizationId && <Link href={`/admin/organizations/${order.organizationId}`} className="rounded-xl bg-evergreen px-4 py-2.5 text-sm font-bold text-white hover:bg-[#0d685f]">View customer account</Link>}
       </div>
+
+      {messages.error && <div className="rounded-2xl border border-red-500/30 bg-red-500/10 px-5 py-4 text-sm text-red-200"><div className="font-bold">Fulfillment action needs attention</div><div className="mt-1 leading-6">{messages.error}</div></div>}
+      {messages.success && <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 px-5 py-4 text-sm text-emerald-200">{messages.success}</div>}
 
       <section className="rounded-2xl border border-gray-800 bg-gradient-to-r from-gray-800/70 to-gray-900 p-6">
         <div className="flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
