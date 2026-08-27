@@ -48,9 +48,7 @@ export async function createSalesAssistedOrderAction(
     products: formData.get('products') || undefined,
     notes: formData.get('notes') || undefined,
   });
-  if (!parsed.success) {
-    return { error: parsed.error.issues[0]?.message ?? 'Check the order details.' };
-  }
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? 'Check the order details.' };
 
   try {
     const order = await createOrder({
@@ -64,9 +62,7 @@ export async function createSalesAssistedOrderAction(
       oneTimeCents: parsed.data.oneTime == null ? null : Math.round(parsed.data.oneTime * 100),
       quoteId: parsed.data.quoteId || null,
       turboSignDocumentId: parsed.data.turboSignDocumentId || null,
-      products: parsed.data.products
-        ? parsed.data.products.split(',').map((p) => p.trim()).filter(Boolean)
-        : [],
+      products: parsed.data.products ? parsed.data.products.split(',').map((p) => p.trim()).filter(Boolean) : [],
       notes: parsed.data.notes || null,
     });
     revalidatePath('/admin/orders');
@@ -78,10 +74,7 @@ export async function createSalesAssistedOrderAction(
     };
   } catch (err) {
     console.error('Create sales-assisted order failed:', err);
-    const message = err instanceof Error && err.message.includes('unique')
-      ? 'That TurboSign document is already linked to an order.'
-      : 'Could not create the order.';
-    return { error: message };
+    return { error: err instanceof Error && err.message.includes('unique') ? 'That TurboSign document is already linked to an order.' : 'Could not create the order.' };
   }
 }
 
@@ -90,9 +83,7 @@ export async function provisionOrderAction(formData: FormData) {
   const id = String(formData.get('orderId') || '');
   const order = await getOrder(id);
   if (!order) throw new Error('Order not found.');
-  if (!['SIGNED', 'FAILED'].includes(order.status)) {
-    throw new Error('Order must be signed before provisioning.');
-  }
+  if (!['SIGNED', 'FAILED'].includes(order.status)) throw new Error('Order must be signed before provisioning.');
   await provisionOrder(order);
   revalidatePath('/admin/orders');
   revalidatePath(`/admin/orders/${id}`);
@@ -105,6 +96,10 @@ export async function retryOwnerInvitationAction(formData: FormData) {
   if (!order) throw new Error('Order not found.');
   if (!order.organizationId) throw new Error('Customer organization has not been provisioned yet.');
   await sendOrderOwnerInvitation(order);
+  const refreshed = await getOrder(id);
+  if (refreshed?.invitationSentAt && ['FAILED', 'PROVISIONING', 'SIGNED'].includes(refreshed.status)) {
+    await updateOrder(id, { status: 'READY_FOR_KICKOFF', provisionedAt: refreshed.provisionedAt ?? new Date() });
+  }
   revalidatePath('/admin/orders');
   revalidatePath(`/admin/orders/${id}`);
 }
@@ -112,16 +107,21 @@ export async function retryOwnerInvitationAction(formData: FormData) {
 export async function updateOrderStatusAction(formData: FormData) {
   await requirePlatformAdmin();
   const id = String(formData.get('orderId') || '');
-  const status = String(formData.get('status') || '') as
-    | 'READY_FOR_KICKOFF'
-    | 'IMPLEMENTATION'
-    | 'FULFILLED';
-  if (!['READY_FOR_KICKOFF', 'IMPLEMENTATION', 'FULFILLED'].includes(status)) {
-    throw new Error('Invalid fulfillment status.');
+  const status = String(formData.get('status') || '') as 'READY_FOR_KICKOFF' | 'IMPLEMENTATION' | 'FULFILLED';
+  if (!['READY_FOR_KICKOFF', 'IMPLEMENTATION', 'FULFILLED'].includes(status)) throw new Error('Invalid fulfillment status.');
+
+  const order = await getOrder(id);
+  if (!order) throw new Error('Order not found.');
+  if (!order.organizationId || !order.entitlementsProvisionedAt || !order.invitationSentAt) {
+    throw new Error('Organization, entitlements, and owner invitation must be complete before fulfillment can advance.');
   }
+  if (status === 'FULFILLED' && !order.onboardingStartedAt) {
+    throw new Error('Implementation must be started before the order can be marked fulfilled.');
+  }
+
   await updateOrder(id, {
     status,
-    onboardingStartedAt: status === 'IMPLEMENTATION' ? new Date() : undefined,
+    onboardingStartedAt: status === 'IMPLEMENTATION' ? (order.onboardingStartedAt ?? new Date()) : undefined,
     fulfilledAt: status === 'FULFILLED' ? new Date() : undefined,
   });
   revalidatePath('/admin/orders');
