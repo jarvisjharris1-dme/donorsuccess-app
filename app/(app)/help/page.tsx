@@ -12,7 +12,6 @@ import {
   HandCoins,
   Megaphone,
   BarChart3,
-  Settings,
   Landmark,
   Globe2,
   UserRoundCog,
@@ -75,11 +74,11 @@ const FEATURE_GUIDES = [
   },
   {
     title: 'Insights & Reports',
-    description: 'Use retention, giving, segmentation, pipeline, at-risk, grants, and volunteer reporting to drive action.',
+    description: 'Use retention, giving, segmentation, pipeline, at-risk, grants, volunteer reporting, and Jarvis insights to drive action.',
     href: '/reports',
-    keywords: 'reports insights retention giving segmentation pipeline risk grants volunteer analytics',
+    keywords: 'reports insights jarvis retention giving segmentation pipeline risk grants volunteer analytics',
     icon: BarChart3,
-    badge: 'Core',
+    badge: 'Updated',
   },
   {
     title: 'Team, Profile & Branding',
@@ -91,10 +90,21 @@ const FEATURE_GUIDES = [
   },
 ];
 
+const NEW_GUIDES = [
+  {
+    title: 'New feature walkthrough',
+    summary: 'Step-by-step help for Grants & Allocations, Community Portal, Board Engagement, Profile & Branding, and Jarvis Insights.',
+    href: '/help/new-features',
+    keywords: 'new features grants allocations community portal board profile branding jarvis reports walkthrough',
+    icon: Sparkles,
+  },
+];
+
 const QUICK_STARTS = [
   { title: 'I am new to Donor Success', text: 'Use the guided setup checklist.', href: '/help/getting-started', icon: ListChecks },
-  { title: 'I need to find a feature', text: 'Browse the product guide below.', href: '#product-guide', icon: LayoutDashboard },
-  { title: 'I need help doing something', text: 'Search guides by task or keyword.', href: '#search', icon: LifeBuoy },
+  { title: 'Show me what is new', text: 'Walk through the newest platform features.', href: '/help/new-features', icon: Sparkles },
+  { title: 'I need to find a feature', text: 'Browse the full product guide below.', href: '#product-guide', icon: LayoutDashboard },
+  { title: 'I need help doing something', text: 'Search by task, feature, or keyword.', href: '#search', icon: LifeBuoy },
 ];
 
 export default function HelpPage() {
@@ -122,9 +132,17 @@ export default function HelpPage() {
     );
   }, [q]);
 
-  function toggleCategory(category: string) {
-    setOpenCategory((current) => (current === category ? null : category));
-  }
+  const filteredNewGuides = useMemo(() => {
+    if (!q) return [];
+    return NEW_GUIDES.filter(
+      (g) =>
+        g.title.toLowerCase().includes(q) ||
+        g.summary.toLowerCase().includes(q) ||
+        g.keywords.includes(q),
+    );
+  }, [q]);
+
+  const totalResults = filteredFeatures.length + filteredArticles.length + filteredNewGuides.length;
 
   return (
     <div className="max-w-6xl">
@@ -147,7 +165,7 @@ export default function HelpPage() {
                 setOpenCategory(null);
               }}
               placeholder="Search: grants, donor health, board, logo, reports..."
-              className="w-full rounded-2xl border-0 bg-white py-3.5 pl-11 pr-4 text-sm text-gray-900 shadow-sm outline-none ring-0 placeholder:text-gray-400 focus:ring-4 focus:ring-white/20"
+              className="w-full rounded-2xl border-0 bg-white py-3.5 pl-11 pr-4 text-sm text-gray-900 shadow-sm outline-none placeholder:text-gray-400 focus:ring-4 focus:ring-white/20"
             />
           </div>
         </div>
@@ -158,15 +176,31 @@ export default function HelpPage() {
           <div className="flex items-end justify-between gap-3">
             <div>
               <h2 className="text-lg font-bold text-gray-900">Search results</h2>
-              <p className="mt-1 text-sm text-gray-500">
-                {filteredFeatures.length + filteredArticles.length} result{filteredFeatures.length + filteredArticles.length === 1 ? '' : 's'} for “{query}”
-              </p>
+              <p className="mt-1 text-sm text-gray-500">{totalResults} result{totalResults === 1 ? '' : 's'} for “{query}”</p>
             </div>
             <button onClick={() => setQuery('')} className="text-sm font-semibold text-evergreen">Clear search</button>
           </div>
 
-          {filteredFeatures.length > 0 && (
+          {filteredNewGuides.length > 0 && (
             <div className="mt-5">
+              <p className="mb-2 text-xs font-bold uppercase tracking-wide text-gray-500">Recommended guides</p>
+              {filteredNewGuides.map((guide) => {
+                const Icon = guide.icon;
+                return (
+                  <Link key={guide.href} href={guide.href} className="flex items-center justify-between gap-4 rounded-[16px] border border-evergreen/20 bg-evergreen/5 p-5 hover:border-evergreen/40">
+                    <div className="flex items-start gap-3">
+                      <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-evergreen text-white"><Icon size={18} /></div>
+                      <div><p className="font-bold text-gray-900">{guide.title}</p><p className="mt-1 text-sm text-gray-600">{guide.summary}</p></div>
+                    </div>
+                    <ChevronRight size={16} className="flex-shrink-0 text-evergreen" />
+                  </Link>
+                );
+              })}
+            </div>
+          )}
+
+          {filteredFeatures.length > 0 && (
+            <div className="mt-6">
               <p className="mb-2 text-xs font-bold uppercase tracking-wide text-gray-500">Product areas</p>
               <div className="grid gap-3 sm:grid-cols-2">
                 {filteredFeatures.map((feature) => <FeatureCard key={feature.title} feature={feature} compact />)}
@@ -183,7 +217,7 @@ export default function HelpPage() {
             </div>
           )}
 
-          {filteredFeatures.length === 0 && filteredArticles.length === 0 && (
+          {totalResults === 0 && (
             <div className="mt-5 rounded-2xl border border-dashed border-gray-200 bg-white p-8 text-center">
               <BookOpen className="mx-auto text-gray-400" size={24} />
               <p className="mt-3 font-semibold text-gray-900">We couldn’t find that yet.</p>
@@ -193,7 +227,7 @@ export default function HelpPage() {
         </section>
       ) : (
         <>
-          <section className="mt-7 grid gap-3 md:grid-cols-3">
+          <section className="mt-7 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             {QUICK_STARTS.map(({ title, text, href, icon: Icon }) => (
               <Link key={title} href={href} className="group rounded-[18px] border border-gray-200 bg-white p-5 transition hover:-translate-y-0.5 hover:border-evergreen/40 hover:shadow-sm">
                 <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-evergreen/10 text-evergreen"><Icon size={19} /></div>
@@ -204,6 +238,18 @@ export default function HelpPage() {
             ))}
           </section>
 
+          <Link href="/help/new-features" className="mt-8 flex flex-col gap-4 rounded-[18px] border border-teal/20 bg-teal/5 p-6 transition hover:border-teal/40 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-start gap-4">
+              <div className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl bg-teal text-white"><Sparkles size={19} /></div>
+              <div>
+                <p className="text-xs font-bold uppercase tracking-[0.14em] text-teal">New & Updated</p>
+                <p className="mt-1 font-extrabold text-gray-900">Learn the newest Donor Success workflows</p>
+                <p className="mt-1 text-sm text-gray-600">Grants & Allocations, Community Portal, Board Engagement, profile and organization branding, and Jarvis Insights.</p>
+              </div>
+            </div>
+            <span className="inline-flex flex-shrink-0 items-center gap-1 text-sm font-bold text-evergreen">View walkthrough <ArrowRight size={14} /></span>
+          </Link>
+
           <section id="product-guide" className="mt-9">
             <div className="flex flex-wrap items-end justify-between gap-3">
               <div>
@@ -213,17 +259,14 @@ export default function HelpPage() {
               </div>
               <Link href="/help/getting-started" className="inline-flex items-center gap-1.5 text-sm font-semibold text-evergreen">Setup checklist <ArrowRight size={14} /></Link>
             </div>
-
             <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               {FEATURE_GUIDES.map((feature) => <FeatureCard key={feature.title} feature={feature} />)}
             </div>
           </section>
 
           <section className="mt-10">
-            <div>
-              <p className="text-xs font-bold uppercase tracking-[0.14em] text-gray-500">Learn by topic</p>
-              <h2 className="mt-1 text-xl font-extrabold text-gray-900">Browse Success Hub guides</h2>
-            </div>
+            <p className="text-xs font-bold uppercase tracking-[0.14em] text-gray-500">Learn by topic</p>
+            <h2 className="mt-1 text-xl font-extrabold text-gray-900">Browse Success Hub guides</h2>
             <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
               {HELP_CATEGORIES.map((category) => {
                 const articles = HELP_ARTICLES.filter((a) => a.category === category);
@@ -233,12 +276,7 @@ export default function HelpPage() {
                 const Icon = meta.icon;
                 const isOpen = openCategory === category;
                 return (
-                  <button
-                    key={category}
-                    type="button"
-                    onClick={() => toggleCategory(category)}
-                    className={`rounded-[16px] border bg-white p-5 text-left transition ${isOpen ? 'border-evergreen ring-2 ring-evergreen/10' : 'border-gray-200 hover:border-gray-300 hover:shadow-sm'}`}
-                  >
+                  <button key={category} type="button" onClick={() => setOpenCategory(isOpen ? null : category)} className={`rounded-[16px] border bg-white p-5 text-left transition ${isOpen ? 'border-evergreen ring-2 ring-evergreen/10' : 'border-gray-200 hover:border-gray-300 hover:shadow-sm'}`}>
                     <div className="flex items-start justify-between gap-3">
                       <div className={`flex h-9 w-9 items-center justify-center rounded-lg ${meta.iconBg}`}><Icon size={18} className={meta.iconColor} /></div>
                       <span className="rounded-full bg-gray-50 px-2.5 py-1 text-[11px] font-semibold text-gray-500">{articles.length} guide{articles.length === 1 ? '' : 's'}</span>
@@ -253,18 +291,12 @@ export default function HelpPage() {
             {openCategory && (
               <div className="mt-4 overflow-hidden rounded-[16px] border border-gray-200 bg-white shadow-sm">
                 <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4">
-                  <div>
-                    <p className="text-[13px] font-bold text-gray-900">{openCategory}</p>
-                    <p className="mt-0.5 text-xs text-gray-500">Choose a guide to keep going.</p>
-                  </div>
+                  <div><p className="text-[13px] font-bold text-gray-900">{openCategory}</p><p className="mt-0.5 text-xs text-gray-500">Choose a guide to keep going.</p></div>
                   <button onClick={() => setOpenCategory(null)} className="text-xs font-semibold text-gray-500 hover:text-gray-800">Close</button>
                 </div>
                 {HELP_ARTICLES.filter((a) => a.category === openCategory).map((a) => (
                   <Link key={a.slug} href={`/help/${a.slug}`} className="flex items-center justify-between gap-4 border-b border-gray-50 px-5 py-4 transition last:border-0 hover:bg-gray-50">
-                    <div className="min-w-0">
-                      <div className="text-[14px] font-semibold text-gray-900">{a.title}</div>
-                      <div className="mt-0.5 text-[12.5px] leading-5 text-gray-600">{a.summary}</div>
-                    </div>
+                    <div className="min-w-0"><div className="text-[14px] font-semibold text-gray-900">{a.title}</div><div className="mt-0.5 text-[12.5px] leading-5 text-gray-600">{a.summary}</div></div>
                     <ChevronRight size={15} className="flex-shrink-0 text-gray-400" />
                   </Link>
                 ))}
@@ -273,10 +305,7 @@ export default function HelpPage() {
           </section>
 
           <section className="mt-10 rounded-[18px] border border-gray-200 bg-gray-50 p-6 sm:flex sm:items-center sm:justify-between sm:gap-6">
-            <div>
-              <p className="font-bold text-gray-900">Still need help?</p>
-              <p className="mt-1 text-sm text-gray-600">Use the in-app chat for a quick answer, or open the guide closest to what you are trying to do.</p>
-            </div>
+            <div><p className="font-bold text-gray-900">Still need help?</p><p className="mt-1 text-sm text-gray-600">Use the in-app chat for a quick answer, or open the guide closest to what you are trying to do.</p></div>
             <Link href="/help/welcome" className="mt-4 inline-flex items-center gap-1.5 rounded-xl bg-evergreen px-4 py-2.5 text-sm font-semibold text-white sm:mt-0">Start with the overview <ArrowRight size={14} /></Link>
           </section>
         </>
@@ -317,10 +346,7 @@ function FeatureCard({ feature, compact = false }: { feature: Feature; compact?:
 function ArticleRow({ slug, title, summary }: { slug: string; title: string; summary: string }) {
   return (
     <Link href={`/help/${slug}`} className="flex items-center justify-between rounded-xl border border-gray-200 bg-white px-5 py-4 transition hover:border-gray-300 hover:shadow-sm">
-      <div className="min-w-0">
-        <div className="font-semibold text-gray-900">{title}</div>
-        <div className="mt-0.5 text-[13px] leading-5 text-gray-600">{summary}</div>
-      </div>
+      <div className="min-w-0"><div className="font-semibold text-gray-900">{title}</div><div className="mt-0.5 text-[13px] leading-5 text-gray-600">{summary}</div></div>
       <ChevronRight size={16} className="flex-shrink-0 text-gray-400" />
     </Link>
   );
