@@ -109,6 +109,42 @@ export async function findOrCreateCommunityApplicant(input: {
   return created[0];
 }
 
+export async function createCommunitySession(applicantId: string) {
+  const sessionToken = randomBytes(32).toString('hex');
+  const sessionHash = hashToken(sessionToken);
+  const sessionId = randomUUID();
+  const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+  await prisma.$executeRawUnsafe(
+    `INSERT INTO "community_sessions" ("id", "applicantId", "tokenHash", "expiresAt")
+     VALUES ($1, $2, $3, $4)`,
+    sessionId,
+    applicantId,
+    sessionHash,
+    expiresAt,
+  );
+  return { token: sessionToken, expiresAt };
+}
+
+export function setCommunitySessionCookie(token: string, expiresAt: Date) {
+  cookies().set(COMMUNITY_SESSION_COOKIE, token, {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: process.env.NODE_ENV === 'production',
+    path: '/',
+    expires: expiresAt,
+  });
+}
+
+export function clearCommunitySessionCookie() {
+  cookies().set(COMMUNITY_SESSION_COOKIE, '', {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: process.env.NODE_ENV === 'production',
+    path: '/',
+    expires: new Date(0),
+  });
+}
+
 export async function issueCommunityMagicLink(input: {
   applicantId: string;
   email: string;
@@ -169,20 +205,7 @@ export async function exchangeCommunityMagicToken(token: string) {
     magic.id,
   );
 
-  const sessionToken = randomBytes(32).toString('hex');
-  const sessionHash = hashToken(sessionToken);
-  const sessionId = randomUUID();
-  const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
-  await prisma.$executeRawUnsafe(
-    `INSERT INTO "community_sessions" ("id", "applicantId", "tokenHash", "expiresAt")
-     VALUES ($1, $2, $3, $4)`,
-    sessionId,
-    magic.applicantId,
-    sessionHash,
-    expiresAt,
-  );
-
-  return { token: sessionToken, expiresAt };
+  return createCommunitySession(magic.applicantId);
 }
 
 export async function getCommunityApplicantSession(): Promise<CommunityApplicantSession | null> {
