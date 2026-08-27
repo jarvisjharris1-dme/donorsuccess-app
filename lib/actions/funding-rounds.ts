@@ -16,7 +16,12 @@ export async function saveFundingRoundAction(
 ): Promise<ActionState> {
   const session = await auth();
   if (!session) redirect('/login');
-  assertGrantCapability(session.user.role as Role, session.user.grantRole as GrantRole | null, 'MANAGE_FUNDING_ROUNDS');
+  assertGrantCapability(
+    session.user.role as Role,
+    session.user.grantRole as GrantRole | null,
+    'MANAGE_FUNDING_ROUNDS',
+    Boolean(session.user.isPlatformAdmin),
+  );
 
   const parsed = fundingRoundSchema.safeParse({
     name: formData.get('name'),
@@ -45,9 +50,7 @@ export async function saveFundingRoundAction(
 
   const round = isUpdate
     ? await db.fundingRound.update({ where: { id }, data })
-    : await db.fundingRound.create({
-        data: { ...data, organizationId: session.user.organizationId },
-      });
+    : await db.fundingRound.create({ data: { ...data, organizationId: session.user.organizationId } });
 
   revalidatePath('/funding-rounds');
   revalidatePath(`/funding-rounds/${round.id}`);
@@ -60,15 +63,18 @@ export async function updateFundingRoundStatusAction(
 ): Promise<ActionState> {
   const session = await auth();
   if (!session) redirect('/login');
-  assertGrantCapability(session.user.role as Role, session.user.grantRole as GrantRole | null, 'MANAGE_FUNDING_ROUNDS');
+  assertGrantCapability(
+    session.user.role as Role,
+    session.user.grantRole as GrantRole | null,
+    'MANAGE_FUNDING_ROUNDS',
+    Boolean(session.user.isPlatformAdmin),
+  );
 
   const db = forOrg(session.user.organizationId);
-
   const round = await db.fundingRound.findUnique({ where: { id: roundId } });
   if (!round) return { error: 'Funding round not found.' };
 
   await db.fundingRound.update({ where: { id: roundId }, data: { status } });
-
   revalidatePath('/funding-rounds');
   revalidatePath(`/funding-rounds/${roundId}`);
   return { success: 'Status updated.' };
