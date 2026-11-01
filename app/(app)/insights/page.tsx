@@ -29,7 +29,7 @@ export default async function InsightsPage({ searchParams }: { searchParams: { s
   const taskWhere = {
     ...(scope === 'mine' ? { assignedToId: user.id } : {}),
     status: { in: [TaskStatus.OPEN, TaskStatus.IN_PROGRESS] },
-    OR: [{ description: null }, { NOT: { description: { startsWith: JARVIS_DRAFT_PREFIX } } }],
+    OR: [{ description: null }, { AND: [{ NOT: { description: { startsWith: JARVIS_DRAFT_PREFIX } } }, { NOT: { description: { startsWith: 'jarvis-lead:v1:' } } }] }],
   };
   const campaignWhere = { parentCampaignId: null, status: { in: [CampaignStatus.PLANNING, CampaignStatus.ACTIVE] },
     ...(user.role === Role.FUNDRAISER ? { OR: [{ visibleToAll: true }, { assignedFundraisers: { some: { id: user.id } } }] } : {}) };

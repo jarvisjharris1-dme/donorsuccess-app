@@ -95,7 +95,7 @@ export async function completeJarvisTask(taskId: string) {
   try {
     const { user, db } = await context();
     const task = await db.task.findFirst({ where: { id: taskId, organizationId: user.organizationId } });
-    if (!task || task.description?.startsWith(JARVIS_DRAFT_PREFIX)) return { error: 'Use Approvals to review outreach drafts.' };
+    if (!task || task.description?.startsWith(JARVIS_DRAFT_PREFIX) || task.description?.startsWith('jarvis-lead:v1:')) return { error: 'Use Jarvis outreach review to update leads and drafts.' };
     if (task.assignedToId !== user.id && !permissions.canManageUsers(user.role as Role)) return { error: 'Only the assigned owner or an administrator can complete this action.' };
     await db.$transaction(async tx => {
       await tx.task.updateMany({ where: { id: taskId, organizationId: user.organizationId },
