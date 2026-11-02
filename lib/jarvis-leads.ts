@@ -5,7 +5,7 @@ export const LEAD_STAGES = ['Identified', 'Researching', 'Ready for outreach', '
 export const LEAD_GOALS = ['Corporate campaign', 'Sponsorship', 'Individual giving', 'Foundation introduction', 'Stewardship', 'Reactivation'] as const;
 const text = (max: number) => z.string().trim().max(max);
 export const leadSchema = z.object({
-  version: z.literal(1), name: text(160).min(1, 'Lead name is required.'),
+  version: z.literal(1), category: z.enum(['Corporate', 'Individual']).default('Individual'), name: text(160).min(1, 'Lead name is required.'),
   contact: text(120), email: z.union([z.literal(''), z.string().trim().email().max(254)]),
   goal: z.enum(LEAD_GOALS), stage: z.enum(LEAD_STAGES),
   rationale: text(2000).min(1, 'Explain why this lead is a fit.'),
@@ -19,6 +19,11 @@ export const leadSchema = z.object({
   capacity: z.enum(['unknown', 'suggested', 'demonstrated']).default('unknown'),
   timing: z.enum(['unknown', 'later', 'soon', 'now']).default('unknown'),
   qualityEvidence: text(2000).default(''),
+  discovery: z.object({
+    matchedFocus: text(300), geographicConnection: text(600), outreachAngle: text(700), searchedAt: z.string().datetime(),
+    evidence: z.array(z.object({ url: z.string().url().max(2000), title: text(200), excerpt: text(150) })).max(3),
+    status: z.literal('research hypothesis'),
+  }).optional(),
   subject: text(250), body: text(12000),
   communicationStatus: z.enum(['not prepared', 'pending review', 'approved']),
   approvedBy: z.string().optional(), approvedAt: z.string().datetime().optional(),
@@ -32,7 +37,7 @@ export function readLead(description: string | null): Lead | null {
 }
 export function writeLead(lead: Lead) { return LEAD_PREFIX + JSON.stringify(leadSchema.parse(lead)); }
 export function emptyLead(): Lead {
-  return { version: 1, name: '', contact: '', email: '', goal: 'Corporate campaign', stage: 'Identified', rationale: '', source: '', nextStep: 'Verify the contact and arrange an introduction', priority: 'MEDIUM', dueDate: '', subject: '', body: '', communicationStatus: 'not prepared', fit: 'unknown', relationship: 'cold', capacity: 'unknown', timing: 'unknown', qualityEvidence: '' };
+  return { version: 1, category: 'Corporate', name: '', contact: '', email: '', goal: 'Corporate campaign', stage: 'Identified', rationale: '', source: '', nextStep: 'Verify the contact and arrange an introduction', priority: 'MEDIUM', dueDate: '', subject: '', body: '', communicationStatus: 'not prepared', fit: 'unknown', relationship: 'cold', capacity: 'unknown', timing: 'unknown', qualityEvidence: '' };
 }
 export function proposeCommunication(lead: Lead, organization: string, sender: string) {
   const subjects: Record<Lead['goal'], string> = {
@@ -55,7 +60,7 @@ export function proposeCommunication(lead: Lead, organization: string, sender: s
 }
 export function preserveApproval(previous: Lead | null, next: Lead): Lead {
   // Recipient, targeting, provenance, or message changes require a fresh review.
-  const fields = ['name', 'contact', 'email', 'goal', 'rationale', 'source', 'subject', 'body', 'qualityEvidence'] as const;
+  const fields = ['name', 'category', 'contact', 'email', 'goal', 'rationale', 'source', 'subject', 'body', 'qualityEvidence'] as const;
   const unchanged = previous?.communicationStatus === 'approved' && fields.every(k => previous[k] === next[k]);
   return { ...next, communicationStatus: unchanged ? 'approved' : next.subject && next.body ? 'pending review' : 'not prepared',
     approvedBy: unchanged ? previous.approvedBy : undefined, approvedAt: unchanged ? previous.approvedAt : undefined };
