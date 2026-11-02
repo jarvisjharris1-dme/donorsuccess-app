@@ -89,7 +89,9 @@ export async function POST(req: NextRequest) {
     },{isolationLevel:'Serializable',timeout:8000});
     return NextResponse.json({success:`Found ${candidates.length} cited ${category.toLowerCase()} prospect hypotheses; saved ${added}. Skipped ${duplicates} possible name duplicates or existing CRM records. Nothing was sent.`,added,duplicates});
   } catch(error) {
-    console.error('Jarvis discovery failed',error instanceof Error?error.name:'UnknownError');
+    const detail = error instanceof Error ? error.message.replace(/sk-[A-Za-z0-9_-]+/g,'[redacted]').slice(0,500) : 'UnknownError';
+    const status = error instanceof Anthropic.APIError ? error.status : undefined;
+    console.error('Jarvis discovery failed', { name:error instanceof Error?error.name:'UnknownError', status, detail });
     return NextResponse.json({error:'Live discovery could not finish. Check the AI provider’s web-search access and retry with narrower criteria. No partial search results were saved.'},{status:502});
   }
 }
