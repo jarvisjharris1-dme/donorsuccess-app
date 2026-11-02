@@ -25,7 +25,7 @@ export async function saveJarvisLead(input: z.infer<typeof inputSchema>) {
     if (id && (!task || !previous || !updatedAt)) return { error: 'Lead not found. Refresh the list.' };
     if (task && task.assignedToId !== user.id && !permissions.canManageUsers(user.role as Role)) return { error: 'Only the lead owner or an administrator can edit this lead.' };
     // Source links are set by the server; a form cannot attach a lead to another donor.
-    let lead = preserveApproval(previous, { ...parsed.data.lead, donorId: previous?.donorId });
+    let lead = preserveApproval(previous, { ...parsed.data.lead, donorId: previous?.donorId, discovery: previous?.discovery });
     if (decision === 'prepare') {
       const org = await db.organization.findUnique({ where: { id: user.organizationId }, select: { name: true } });
       lead = { ...lead, ...proposeCommunication(lead, org?.name || 'our organization', user.name || ''),
@@ -88,7 +88,7 @@ export async function buildJarvisPipeline(scope: 'mine' | 'all') {
         const lapsed = daysSinceGift !== null && daysSinceGift > 420;
         const renewalWindow = daysSinceGift !== null && daysSinceGift >= 330 && daysSinceGift <= 420;
         const priorGiving = Number(donor.lifetimeGiving) > 0;
-        const lead = { ...emptyLead(), donorId: donor.id, name,
+        const lead = { ...emptyLead(), category: donor.organizationName ? 'Corporate' as const : 'Individual' as const, donorId: donor.id, name,
           // Organization names are never treated as a verified person's name.
           contact: [donor.firstName, donor.lastName].filter(Boolean).join(' '), email: donor.email || '',
           goal: (lapsed ? 'Reactivation' : priorGiving ? 'Stewardship' : donor.organizationName ? 'Corporate campaign' : 'Individual giving') as ReturnType<typeof emptyLead>['goal'],
